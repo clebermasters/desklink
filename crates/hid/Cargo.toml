@@ -1,0 +1,13 @@
+[package]
+name = "desklink-hid"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Presents shared input as a standard keyboard and mouse (USB/Bluetooth HID reports)"
+
+[dependencies]
+desklink-platform.workspace = true
+desklink-protocol.workspace = true
+anyhow.workspace = true
+tracing.workspace = true

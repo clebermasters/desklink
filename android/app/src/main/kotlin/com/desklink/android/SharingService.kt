@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import com.desklink.android.bluetooth.KeyboardSharing
 import com.desklink.android.clipboard.ClipboardSync
 import com.desklink.android.clipboard.SendClipboardActivity
 import com.desklink.android.input.InputRouter
@@ -29,6 +30,7 @@ class SharingService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var settings: Settings
     private lateinit var router: InputRouter
+    private lateinit var keyboard: KeyboardSharing
     private var pump: Thread? = null
     private var stopper: Thread? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -64,6 +66,7 @@ class SharingService : Service() {
         settings = Settings(this)
         router = InputRouter(this, settings)
         router.onReceivingChanged = { notifyStatus() }
+        keyboard = KeyboardSharing(this)
         createChannel()
     }
 
@@ -80,6 +83,14 @@ class SharingService : Service() {
             }
             ACTION_STOP_HELPER -> if (pump != null) {
                 router.shellBackend.stopHelper()
+                return START_STICKY
+            }
+            ACTION_KEYBOARD -> if (pump != null) {
+                // The Bluetooth computer was added, removed or changed: restart only its agent.
+                thread(name = "desklink-keyboard-restart") {
+                    keyboard.stop()
+                    main.post { if (pump != null) keyboard.start() }
+                }
                 return START_STICKY
             }
         }
@@ -112,6 +123,7 @@ class SharingService : Service() {
         val previousStop = stopper
         pump = thread(name = "desklink-pump") {
             previousStop?.join()
+            keyboard.start() // after the previous stop, which may still be releasing it
             try {
                 NativeBridge.init(dir, Build.MODEL ?: "Android phone")
                 NativeBridge.start(dir)
@@ -159,6 +171,7 @@ class SharingService : Service() {
         val previous = pump
         pump = null
         stopper = thread(name = "desklink-stop") {
+            keyboard.stop()
             NativeBridge.stop()
             previous?.join(4_000)
             main.post {
@@ -257,6 +270,12 @@ class SharingService : Service() {
         const val ACTION_STOP = "com.desklink.android.STOP"
         const val ACTION_GEOMETRY = "com.desklink.android.GEOMETRY"
         const val ACTION_STOP_HELPER = "com.desklink.android.STOP_HELPER"
+        const val ACTION_KEYBOARD = "com.desklink.android.KEYBOARD"
+
+        /** Applies Bluetooth computer changes to a running service; does nothing otherwise. */
+        fun keyboardChanged(context: Context) {
+            if (running) context.startService(Intent(context, SharingService::class.java).setAction(ACTION_KEYBOARD))
+        }
 
         @Volatile var running = false
             private set

@@ -60,7 +60,9 @@ The test driver creates virtual input devices exclusively in its private composi
 
 ## Android receiver
 
-`cargo test -p desklink-android` runs the queue, keymap, desktop and profile unit tests. It also runs an in-process agent against a headless controller over loopback.
+`cargo test -p desklink-android` runs the queue, keymap, desktop and profile unit tests. It also runs an in-process agent against a headless controller over loopback, and the same for the Bluetooth keyboard-and-mouse agent (`tests/keyboard_e2e.rs`): entry position, clicks, Control+C as Command+C, and release of held keys on return. `cargo test -p desklink-hid` checks the report descriptor against the report builders.
+
+The Bluetooth path itself needs real hardware: a phone and a computer that pairs it. The app's adb-only provider has `hid-start`, `hid-status` and `hid-send` hooks for driving the keyboard and mouse directly while testing.
 
 `tests/android_e2e.py --serial <device>` installs the debug APK on an emulator or test phone. It drives the app through `adb forward` with `crates/android/examples/controller.rs`, so this computer's input is never captured. It verifies:
 

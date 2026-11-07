@@ -25,6 +25,7 @@ import android.widget.RadioGroup
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import com.desklink.android.bluetooth.BluetoothCard
 import com.desklink.android.clipboard.ClipboardSync
 import com.desklink.android.input.DesklinkAccessibilityService
 import com.desklink.android.input.ShellBackend
@@ -39,6 +40,7 @@ class MainActivity : Activity() {
     private var info: JSONObject? = null
     private var connectedKeys: Set<String> = emptySet()
     private var resumed = false
+    private lateinit var bluetooth: BluetoothCard
 
     private val status: TextView by lazy { findViewById(R.id.status) }
     private val toggle: Button by lazy { findViewById(R.id.toggle) }
@@ -60,6 +62,7 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
         settings = Settings(this)
         bindControls()
+        bluetooth = BluetoothCard(this, settings)
         background({ NativeBridge.init(settings.profileDir, Build.MODEL ?: "Android phone") }) { refreshProfile() }
         handlePairingIntent(intent)
         ProfileEvents.add(profileChanged)
@@ -97,6 +100,14 @@ class MainActivity : Activity() {
         if (hasFocus && SharingService.running && info?.optBoolean("clipboard") == true) {
             ClipboardSync.sendCurrent(this)
         }
+    }
+
+    /** This phone's profile: name, pairing code and trusted computers. */
+    internal fun phoneInfo(): JSONObject? = info
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_BLUETOOTH) bluetooth.permissionsChanged()
     }
 
     private fun bindControls() {
@@ -252,6 +263,7 @@ class MainActivity : Activity() {
             findViewById<TextView>(R.id.own_address).text =
                 "Reachable at ${loaded.getString("address")} on this network."
             renderPeers()
+            bluetooth.update(loaded)
         }
     }
 
@@ -300,6 +312,7 @@ class MainActivity : Activity() {
     }
 
     private fun refreshStatus() {
+        bluetooth.refreshStatus()
         val dir = settings.profileDir
         background({ JSONObject(NativeBridge.status(dir)) }) { state ->
             val running = state.optBoolean("running")
@@ -358,15 +371,15 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun copy(label: String, text: String) {
+    internal fun copy(label: String, text: String) {
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(label, text))
         toast("Copied")
     }
 
-    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    internal fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
 
     /** Runs native calls off the main thread; errors are shown to the user. */
-    private fun <T> background(work: () -> T, done: (T) -> Unit) {
+    internal fun <T> background(work: () -> T, done: (T) -> Unit) {
         worker.execute {
             val result = try {
                 Result.success(work())
@@ -378,5 +391,9 @@ class MainActivity : Activity() {
                 result.onSuccess(done).onFailure { toast(it.message ?: "Something went wrong") }
             }
         }
+    }
+
+    companion object {
+        const val REQUEST_BLUETOOTH = 2
     }
 }

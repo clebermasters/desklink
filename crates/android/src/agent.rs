@@ -1,7 +1,13 @@
 //! Runs the shared Desklink agent on a dedicated thread inside the app process.
-use crate::{bridge::Bridge, desktop::AndroidDesktop, profile};
+use crate::{
+    bridge::{Bridge, BridgeSink},
+    desktop::AndroidDesktop,
+    profile,
+};
 use anyhow::{Context, Result};
 use desklink::runtime::{Host, run_with_host};
+use desklink_hid::{HidDesktop, Options};
+use desklink_platform::Desktop;
 use desklink_settings::{
     Config,
     control::{Request, Status},
@@ -27,8 +33,18 @@ struct Running {
     shutdown: CancellationToken,
 }
 
+/// What the agent's input drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Receiver {
+    /// This phone, through the accessibility service or the ADB helper.
+    Phone,
+    /// Another computer, through the phone's Bluetooth keyboard and mouse.
+    Keyboard(Options),
+}
+
 pub struct Agent {
     bridge: Arc<Bridge>,
+    receiver: Mutex<Receiver>,
     running: Mutex<Option<Running>>,
     error: Arc<Mutex<Option<String>>>,
 }
@@ -50,12 +66,17 @@ impl Agent {
     pub fn new(bridge: Arc<Bridge>) -> Self {
         Self {
             bridge,
+            receiver: Mutex::new(Receiver::Phone),
             running: Mutex::new(None),
             error: Arc::new(Mutex::new(None)),
         }
     }
     pub fn bridge(&self) -> &Arc<Bridge> {
         &self.bridge
+    }
+    /// Takes effect at the next [`Agent::start`].
+    pub fn set_receiver(&self, receiver: Receiver) {
+        *lock(&self.receiver) = receiver;
     }
     /// Idempotent: starting a running agent does nothing. Configuration errors are returned
     /// synchronously; failures after startup are reported through [`Agent::status`].
@@ -71,9 +92,17 @@ impl Agent {
         let config = Config::load(&path)?;
         let identity =
             Identity::load(&identity_path(&path)).context("cannot load this phone's identity")?;
-        self.bridge
-            .geometry()
-            .context("report the screen size before starting")?;
+        let desktop: Box<dyn Desktop + Send> = match *lock(&self.receiver) {
+            Receiver::Phone => {
+                self.bridge
+                    .geometry()
+                    .context("report the screen size before starting")?;
+                Box::new(AndroidDesktop::new(self.bridge.clone()))
+            }
+            Receiver::Keyboard(options) => {
+                Box::new(HidDesktop::new(BridgeSink(self.bridge.clone()), options)?)
+            }
+        };
         let profile_lock = lock_profile(&path)?;
         self.bridge.reopen();
         *lock(&self.error) = None;
@@ -92,7 +121,7 @@ impl Agent {
                             identity,
                             path,
                             Host {
-                                desktop: Box::new(AndroidDesktop::new(bridge.clone())),
+                                desktop,
                                 tick: TICK,
                                 handle_signals: false,
                                 shutdown: token,

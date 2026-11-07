@@ -49,8 +49,16 @@ Verified on a physical Samsung Galaxy Z Fold7 (Android 17, cover screen 1080×25
 - click focus, typing, Ctrl+A/Ctrl+C/Ctrl+V, wheel scrolling
 - Unicode text clipboard in both directions
 
+Bluetooth keyboard and mouse, verified with the same Galaxy Z Fold7 and a company-managed MacBook Pro (macOS 26.3, standard user, no Desklink installed): Linux → Wi-Fi → phone → Bluetooth → Mac.
+- The Mac pairs the phone from its own Bluetooth settings without an admin password, and lists it as a HID device.
+- The Linux controller sees the Mac's 1512×982 screen on its left edge. Crossing places the Mac pointer at the matching edge position, absolute positions land exactly (25%/75% checks), and returning restores Linux control at the matching height.
+- Text typed on Linux arrives unchanged in a Mac Terminal. The phone keeps working as its own screen at the same time.
+
 Not yet verified:
 - Fold/unfold geometry changes on a foldable.
+- Bluetooth: Control↔Command shortcuts (unit-tested only); reconnection after the Mac sleeps; Windows and Linux hosts; the in-app setup flow end to end (the live test used `android-pair.sh --keyboard`).
+
+Bluetooth on macOS, found by testing: macOS ignores buttons on an absolute pointer and reads each absolute report as "all buttons up", and scrolls only with the absolute pointer's wheel. Buttons therefore travel in relative reports, and a drag moves relatively. Left, right, middle and back clicks, scrolling and drags work. **Known issue:** a relative drag is subject to macOS pointer acceleration, so on release the pointer jumps back to the exact layout position. A fix is in progress.
 - Layout-editor mode: `LayoutUpdate` sync and `Traverse` through the phone.
 - PNG clipboard on Android.
 - Drag, long-press/right-click and the Back button.

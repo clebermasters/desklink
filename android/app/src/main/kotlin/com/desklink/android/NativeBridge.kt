@@ -27,6 +27,19 @@ object NativeBridge {
     @JvmStatic external fun nextActions(timeoutMs: Int): ByteArray?
     @JvmStatic external fun localClipboard(kind: Int, data: ByteArray)
 
+    /** HID report descriptor for the Bluetooth keyboard and mouse (crates/hid). */
+    @JvmStatic external fun hidDescriptor(): ByteArray
+
+    // A computer without Desklink, controlled as a Bluetooth keyboard and mouse. Its profile has
+    // its own identity and port; `info`, `setName` and `unpair` also work on its directory.
+    @JvmStatic external fun keyboardEnsure(dir: String, name: String)
+    @JvmStatic external fun keyboardTrust(phoneDir: String, dir: String, publicKey: String): String
+    @JvmStatic external fun keyboardPair(dir: String, code: String): String
+    @JvmStatic external fun keyboardStart(dir: String, width: Int, height: Int, relative: Boolean, swapControlAndCommand: Boolean)
+    @JvmStatic external fun keyboardStop()
+    @JvmStatic external fun keyboardStatus(dir: String): String
+    @JvmStatic external fun keyboardNextActions(timeoutMs: Int): ByteArray?
+
     const val CLIPBOARD_TEXT = 0
     const val CLIPBOARD_PNG = 1
 }

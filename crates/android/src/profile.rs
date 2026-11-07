@@ -16,8 +16,23 @@ pub fn config_path(dir: &Path) -> PathBuf {
     dir.join("config.toml")
 }
 
+/// The keyboard-and-mouse profile listens beside the phone's own receiver.
+pub const KEYBOARD_PORT: u16 = DEFAULT_PORT + 1;
+
 /// Creates the identity and configuration on first use. Never replaces an existing identity.
 pub fn ensure(dir: &Path, default_name: &str) -> Result<()> {
+    ensure_on_port(dir, default_name, DEFAULT_PORT)
+}
+
+/// A computer without Desklink that this phone controls as a Bluetooth keyboard and mouse.
+/// It has an identity of its own, so the controller arranges it as a separate screen, and no
+/// clipboard: nothing on that computer could receive or send one.
+pub fn ensure_keyboard(dir: &Path, default_name: &str) -> Result<()> {
+    ensure_on_port(dir, default_name, KEYBOARD_PORT)?;
+    set_clipboard(dir, false)
+}
+
+fn ensure_on_port(dir: &Path, default_name: &str, port: u16) -> Result<()> {
     let path = config_path(dir);
     let id = identity_path(&path);
     if !id.exists() {
@@ -26,7 +41,7 @@ pub fn ensure(dir: &Path, default_name: &str) -> Result<()> {
     if !path.exists() {
         Config::new(
             clean_name(default_name),
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_PORT),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
         )
         .save(&path)?;
     }
@@ -138,6 +153,53 @@ pub fn pair(dir: &Path, code: &str, controller: bool) -> Result<String> {
     Ok(code.name)
 }
 
+/// Makes the computer in `code` the keyboard profile's only, controlling, peer.
+pub fn pair_keyboard(dir: &Path, code: &str) -> Result<String> {
+    let code = PairingCode::decode(code)?;
+    let key = parse_public(&code.public_key)?;
+    trust_only(
+        dir,
+        Peer {
+            public_key: hex::encode(key),
+            ..code.peer()
+        },
+    )?;
+    Ok(code.name)
+}
+
+/// Makes a computer the phone already trusts the keyboard profile's only, controlling, peer.
+pub fn trust_keyboard_controller(phone_dir: &Path, dir: &Path, public_key: &str) -> Result<String> {
+    let key = parse_public(public_key)?;
+    let phone = Config::load(&config_path(phone_dir))?;
+    let peer = phone
+        .peers
+        .into_iter()
+        .find(|p| parse_public(&p.public_key).ok() == Some(key))
+        .context("pair the controlling computer with this phone first")?;
+    let name = peer.name.clone();
+    trust_only(dir, peer)?;
+    Ok(name)
+}
+
+fn trust_only(dir: &Path, peer: Peer) -> Result<()> {
+    let path = config_path(dir);
+    let own = Identity::load(&identity_path(&path))?.public;
+    ensure!(
+        parse_public(&peer.public_key)? != own,
+        "This is the keyboard's own pairing code."
+    );
+    Config::modify(&path, |config| {
+        if config.layout_owner.as_ref() != Some(&peer.public_key) {
+            config.layout = None;
+        }
+        config.layout_owner = Some(peer.public_key.clone());
+        config.peers = vec![peer.clone()];
+        config.clipboard = false;
+        config.validate_for(own)
+    })?;
+    Ok(())
+}
+
 pub fn unpair(dir: &Path, public_key: &str) -> Result<()> {
     let key = parse_public(public_key)?;
     Config::modify(&config_path(dir), |config| {
@@ -245,6 +307,37 @@ mod tests {
                 .peers
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn keyboard_profile_has_its_own_identity_port_and_single_controller() {
+        let phone = tempfile::tempdir().unwrap();
+        let keyboard = tempfile::tempdir().unwrap();
+        ensure(phone.path(), "Phone").unwrap();
+        pair(phone.path(), &code([7; 32], "Laptop"), true).unwrap();
+        ensure_keyboard(keyboard.path(), "MacBook").unwrap();
+        let info = info(keyboard.path(), Some("10.0.0.5")).unwrap();
+        assert_eq!(info.address, format!("10.0.0.5:{KEYBOARD_PORT}"));
+        assert!(!info.clipboard);
+        assert_ne!(
+            info.public_key,
+            super::info(phone.path(), None).unwrap().public_key
+        );
+        assert!(
+            trust_keyboard_controller(phone.path(), keyboard.path(), &hex::encode([9; 32]))
+                .is_err(),
+            "only computers the phone trusts"
+        );
+        assert_eq!(
+            trust_keyboard_controller(phone.path(), keyboard.path(), &hex::encode([7; 32]))
+                .unwrap(),
+            "Laptop"
+        );
+        pair_keyboard(keyboard.path(), &code([8; 32], "Desktop")).unwrap();
+        let config = Config::load(&config_path(keyboard.path())).unwrap();
+        assert_eq!(config.peers.len(), 1, "a single controlling computer");
+        assert_eq!(config.layout_owner, Some(hex::encode([8; 32])));
+        assert!(pair_keyboard(keyboard.path(), &info.pairing_code).is_err());
     }
 
     #[test]

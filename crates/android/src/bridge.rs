@@ -1,9 +1,10 @@
 //! Bounded hand-off between the sharing agent thread and the Android app's input pump.
 use anyhow::{Result, ensure};
+use desklink_hid::{Report, ReportSink};
 use desklink_protocol::{ClipboardContent, ClipboardKind, Geometry};
 use std::{
     collections::VecDeque,
-    sync::{Condvar, Mutex, MutexGuard},
+    sync::{Arc, Condvar, Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -15,12 +16,27 @@ const MAX_LOCAL: usize = 4;
 /// Work for the app to perform. Coordinates are in the logical units advertised in `Hello`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
-    Move { x: i32, y: i32 },
+    Move {
+        x: i32,
+        y: i32,
+    },
     Hide,
-    Button { button: u8, down: bool },
-    Key { keycode: i32, meta: i32, down: bool },
-    Scroll { horizontal: i32, vertical: i32 },
+    Button {
+        button: u8,
+        down: bool,
+    },
+    Key {
+        keycode: i32,
+        meta: i32,
+        down: bool,
+    },
+    Scroll {
+        horizontal: i32,
+        vertical: i32,
+    },
     Clipboard(ClipboardContent),
+    /// A Bluetooth keyboard or mouse report for the computer the phone presents itself to.
+    Report(Report),
 }
 
 #[derive(Debug, PartialEq)]
@@ -69,8 +85,8 @@ impl Bridge {
     pub fn push(&self, action: Action) -> Result<()> {
         let mut state = self.lock();
         // Only the newest pointer position matters, unless a button event is in between.
-        if let Action::Move { .. } = action
-            && let Some(last @ Action::Move { .. }) = state.actions.back_mut()
+        if let Some(last) = state.actions.back_mut()
+            && supersedes(&action, last)
         {
             *last = action;
         } else {
@@ -136,6 +152,19 @@ const BUTTON: u8 = 3;
 const KEY: u8 = 4;
 const SCROLL: u8 = 5;
 const CLIPBOARD: u8 = 6;
+const REPORT: u8 = 7;
+
+/// Whether `next` makes the queued `last` redundant.
+fn supersedes(next: &Action, last: &Action) -> bool {
+    match (next, last) {
+        (Action::Move { .. }, Action::Move { .. }) => true,
+        // Consecutive absolute positions; wheel and button reports in between keep their order.
+        (Action::Report(next), Action::Report(last)) => {
+            next.position_only && last.position_only && next.id == last.id
+        }
+        _ => false,
+    }
+}
 
 /// Big-endian records, read with `java.nio.ByteBuffer` on the app side.
 pub fn encode(actions: &[Action]) -> Vec<u8> {
@@ -173,9 +202,23 @@ pub fn encode(actions: &[Action]) -> Vec<u8> {
                 out.extend((content.bytes.len() as u32).to_be_bytes());
                 out.extend(&content.bytes);
             }
+            Action::Report(report) => {
+                out.extend([REPORT, report.id, report.data.len() as u8]);
+                out.extend(&report.data);
+            }
         }
     }
     out
+}
+
+/// Feeds a [`desklink_hid::HidDesktop`]'s reports to the app, which sends them over Bluetooth.
+pub struct BridgeSink(pub Arc<Bridge>);
+
+impl ReportSink for BridgeSink {
+    fn send(&mut self, report: Report) -> Result<()> {
+        ensure!(report.data.len() <= u8::MAX as usize, "report too large");
+        self.0.push(Action::Report(report))
+    }
 }
 
 pub fn kind_code(kind: ClipboardKind) -> u8 {
@@ -223,6 +266,43 @@ mod tests {
             ])
         );
         assert_eq!(bridge.take(Duration::ZERO), Taken::Timeout);
+    }
+
+    fn position(x: u8) -> Action {
+        Action::Report(Report {
+            id: 2,
+            data: vec![x, 0, 0, 0, 0, 0],
+            position_only: true,
+        })
+    }
+    fn buttons(state: u8) -> Action {
+        Action::Report(Report {
+            id: 3,
+            data: vec![state, 0, 0, 0, 0, 0, 0],
+            position_only: false,
+        })
+    }
+
+    #[test]
+    fn pointer_positions_coalesce_but_never_across_buttons() {
+        let bridge = Bridge::new();
+        bridge.push(position(1)).unwrap();
+        bridge.push(position(2)).unwrap();
+        bridge.push(buttons(1)).unwrap(); // a press is never dropped or reordered
+        bridge.push(position(3)).unwrap(); // dragging
+        bridge.push(position(4)).unwrap();
+        bridge.push(buttons(0)).unwrap();
+        bridge.push(buttons(0)).unwrap(); // only positions coalesce
+        assert_eq!(
+            bridge.take(Duration::ZERO),
+            Taken::Actions(vec![
+                position(2),
+                buttons(1),
+                position(4),
+                buttons(0),
+                buttons(0)
+            ])
+        );
     }
 
     #[test]
@@ -317,6 +397,11 @@ mod tests {
                 kind: ClipboardKind::Text,
                 bytes: b"hi".to_vec(),
             }),
+            Action::Report(Report {
+                id: 1,
+                data: vec![2, 0, 4],
+                position_only: false,
+            }),
         ]);
         assert_eq!(
             bytes,
@@ -327,6 +412,7 @@ mod tests {
                 vec![4, 0, 0, 0, 29, 0, 0, 0x10, 0, 0],
                 vec![5, 0, 0, 0, 0, 255, 255, 255, 254],
                 vec![6, 0, 0, 0, 0, 2, b'h', b'i'],
+                vec![7, 1, 3, 2, 0, 4],
             ]
             .concat()
         );

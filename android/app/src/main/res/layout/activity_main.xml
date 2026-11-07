@@ -74,10 +74,20 @@
         <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
             <TextView style="@style/CardTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Computers" />
             <LinearLayout android:id="@+id/peers" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
-            <TextView style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="Paste the computer's pairing code (desklink://pair/…). On the computer, open Desklink → Add computer, or run desklink pairing-code." />
-            <EditText android:id="@+id/pair_code" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="desklink://pair/…" android:importantForAutofill="no" android:inputType="textUri" android:maxLines="3" />
-            <CheckBox android:id="@+id/pair_controller" android:layout_width="match_parent" android:layout_height="wrap_content" android:checked="true" android:text="Let this computer arrange the screens" />
-            <Button android:id="@+id/pair" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Pair" />
+            <!-- The computer controlled as a Bluetooth keyboard and mouse, if any; see BluetoothCard. -->
+            <LinearLayout android:id="@+id/keyboard_computer" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
+            <TextView style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Add a computer. How does it connect?" />
+            <RadioGroup android:id="@+id/approach" android:layout_width="match_parent" android:layout_height="wrap_content">
+                <RadioButton android:id="@+id/approach_desklink" android:layout_width="match_parent" android:layout_height="wrap_content" android:checked="true" android:text="It runs Desklink (Wi-Fi)" />
+                <RadioButton android:id="@+id/approach_bluetooth" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="No Desklink: control it as a Bluetooth keyboard and mouse" />
+            </RadioGroup>
+            <LinearLayout android:id="@+id/desklink_pairing" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+                <TextView style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="Paste the computer's pairing code (desklink://pair/…). On the computer, open Desklink → Add computer, or run desklink pairing-code." />
+                <EditText android:id="@+id/pair_code" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="desklink://pair/…" android:importantForAutofill="no" android:inputType="textUri" android:maxLines="3" />
+                <CheckBox android:id="@+id/pair_controller" android:layout_width="match_parent" android:layout_height="wrap_content" android:checked="true" android:text="Let this computer arrange the screens" />
+                <Button android:id="@+id/pair" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Pair" />
+            </LinearLayout>
+            <LinearLayout android:id="@+id/bluetooth_setup" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone" />
         </LinearLayout>
 
         <!-- This phone -->

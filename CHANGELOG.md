@@ -2,6 +2,8 @@
 
 ## 0.2.0 — in development
 
+- Bluetooth keyboard and mouse: the Android app can control a computer that runs no Desklink software and needs no admin rights there. The computer pairs the phone as a standard Bluetooth keyboard and mouse; a paired Desklink computer arranges it as its own screen and drives it through the phone. Absolute pointer positioning, optional Control↔Command swap for Macs, `scripts/android-pair.sh --keyboard`. Choose per computer in the app: "It runs Desklink" or "No Desklink".
+- New `desklink-hid` crate: HID report descriptor, evdev→HID key map and a receiving `Desktop` that emits keyboard/pointer reports, shared by the phone today and a direct Linux Bluetooth path later.
 - Android receiver app: the unmodified agent runs through JNI. Input goes through an accessibility service (default) or an opt-in ADB helper that runs as the shell user, authenticated with a token. Includes a pointer overlay, rotation-aware geometry, text/PNG clipboard both ways, pairing links and a foreground service.
 - `desklink pairing-code` and `desklink pair CODE [--edge]` CLI commands; `scripts/android-pair.sh` and `scripts/android-input-helper.sh`.
 - The runtime can be embedded (`runtime::run_with_host`) with a custom desktop, tick interval and shutdown token.

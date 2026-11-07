@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 desklink = { path = "../cli", default-features = false }
+desklink-hid.workspace = true
 desklink-platform.workspace = true
 desklink-protocol.workspace = true
 desklink-settings.workspace = true

@@ -25,6 +25,7 @@ You have a laptop, a desktop and a phone, all within arm's reach. You also have 
 - **📱 Use your phone with your real mouse and keyboard.** Click to tap, type into any text field, scroll with the wheel, and paste from your computer straight into a chat on the phone.
 - **📋 A clipboard that travels.** Copy text or a **PNG image with transparency** on one machine and paste it on another. It works in every direction, whichever device holds the keyboard.
 - **🗺️ Arrange your desk visually.** A native layout editor lets you drag, resize and snap screen cards to match your physical setup. Left, right, top, bottom, partial overlaps, different resolutions, and rows of three or more computers are all supported.
+- **🔵 Even computers without Desklink.** Your phone can stand in as a Bluetooth keyboard and mouse for a computer where you can't install anything.
 - **🔐 Private by design.** Devices talk directly over your LAN with **Noise XX** encryption and **explicit pairing on both sides**. Nothing accepts a connection on first use without your approval, and nothing passes through a server.
 - **🪶 Small and native.** One Rust executable per platform. No Electron, no Qt, no kernel driver and no privileged background service.
 - **🛟 Always a way back.** **Ctrl+Alt+Shift+Escape** returns control to the local machine instantly, and held keys are released if a peer disappears.
@@ -112,6 +113,8 @@ Two input modes, your choice:
 
 - **Accessibility (default).** No developer settings and no elevated access. Taps, drags, scrolling and typing.
 - **ADB developer mode (opt-in).** A real mouse with hover, right-click and wheel events, plus keyboard shortcuts in every app. It uses a small helper that runs as the ordinary adb shell user, never root.
+
+**No Desklink on that computer? 🔵 Use Bluetooth.** For a computer you can't install software on, such as a locked-down work laptop, the phone becomes a **standard Bluetooth keyboard and mouse**. Pair it in that computer's Bluetooth settings (no admin rights needed), and your Desklink computer drives it through the phone: `Linux → Wi-Fi → phone → Bluetooth → Mac`. Pick the approach per computer in the app: *It runs Desklink* or *No Desklink*. See [Bluetooth keyboard and mouse](docs/android.md#computers-without-desklink-bluetooth-keyboard-and-mouse).
 
 ✅ **Tested on real hardware:** a Samsung Galaxy Z Fold7 (Android 17) over home Wi-Fi, covering edge handoff, typing, shortcuts, scrolling and clipboard both ways. It's also covered by an 18-check emulator suite. Full guide: **[docs/android.md](docs/android.md)**.
 

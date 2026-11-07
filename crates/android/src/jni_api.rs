@@ -3,7 +3,7 @@
 //! Every function catches panics and converts errors into `IllegalStateException`, so a
 //! failure never unwinds into the Android runtime.
 use crate::{
-    agent::Agent,
+    agent::{Agent, Receiver},
     bridge::{self, Bridge, Taken},
     logcat, profile,
 };
@@ -23,12 +23,33 @@ use std::{
 };
 
 static AGENT: OnceLock<Agent> = OnceLock::new();
+/// Drives the computer the phone presents itself to as a Bluetooth keyboard and mouse. Android
+/// connects a HID device to one computer at a time, so there is at most one.
+static KEYBOARD: OnceLock<Agent> = OnceLock::new();
 
 fn agent() -> &'static Agent {
     AGENT.get_or_init(|| {
         logcat::init();
         Agent::new(Arc::new(Bridge::new()))
     })
+}
+
+fn keyboard() -> &'static Agent {
+    KEYBOARD.get_or_init(|| {
+        logcat::init();
+        Agent::new(Arc::new(Bridge::new()))
+    })
+}
+
+fn take_actions(env: &mut JNIEnv, agent: &Agent, timeout_ms: jint) -> Result<jbyteArray> {
+    let timeout = Duration::from_millis(timeout_ms.clamp(0, 10_000) as u64);
+    match agent.bridge().take(timeout) {
+        Taken::Actions(actions) => Ok(env
+            .byte_array_from_slice(&bridge::encode(&actions))?
+            .into_raw()),
+        Taken::Timeout => Ok(env.byte_array_from_slice(&[])?.into_raw()),
+        Taken::Closed => Ok(ptr::null_mut()),
+    }
 }
 
 fn guard<T>(env: &mut JNIEnv, default: T, f: impl FnOnce(&mut JNIEnv) -> Result<T>) -> T {
@@ -229,14 +250,7 @@ pub extern "system" fn Java_com_desklink_android_NativeBridge_nextActions(
     timeout_ms: jint,
 ) -> jbyteArray {
     guard(&mut env, ptr::null_mut(), |env| {
-        let timeout = Duration::from_millis(timeout_ms.clamp(0, 10_000) as u64);
-        match agent().bridge().take(timeout) {
-            Taken::Actions(actions) => Ok(env
-                .byte_array_from_slice(&bridge::encode(&actions))?
-                .into_raw()),
-            Taken::Timeout => Ok(env.byte_array_from_slice(&[])?.into_raw()),
-            Taken::Closed => Ok(ptr::null_mut()),
-        }
+        take_actions(env, agent(), timeout_ms)
     })
 }
 
@@ -253,5 +267,125 @@ pub extern "system" fn Java_com_desklink_android_NativeBridge_localClipboard(
         agent()
             .bridge()
             .local_clipboard(ClipboardContent { kind, bytes })
+    })
+}
+
+/// The keyboard-and-mouse report descriptor the app registers with Android's HID device profile.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_desklink_android_NativeBridge_hidDescriptor(
+    mut env: JNIEnv,
+    _: JClass,
+) -> jbyteArray {
+    guard(&mut env, ptr::null_mut(), |env| {
+        Ok(env
+            .byte_array_from_slice(desklink_hid::descriptor::DESCRIPTOR)?
+            .into_raw())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_desklink_android_NativeBridge_keyboardEnsure(
+    mut env: JNIEnv,
+    _: JClass,
+    path: JString,
+    name: JString,
+) {
+    guard(&mut env, (), |env| {
+        keyboard();
+        let (path, name) = (dir(env, &path)?, text(env, &name)?);
+        profile::ensure_keyboard(&path, &name)
+    })
+}
+
+/// Trusts a computer this phone already trusts as the keyboard's controlling computer.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_desklink_android_NativeBridge_keyboardTrust(
+    mut env: JNIEnv,
+    _: JClass,
+    phone: JString,
+    path: JString,
+    key: JString,
+) -> jstring {
+    guard(&mut env, ptr::null_mut(), |env| {
+        let (phone, path, key) = (dir(env, &phone)?, dir(env, &path)?, text(env, &key)?);
+        let name = profile::trust_keyboard_controller(&phone, &path, &key)?;
+        Ok(env.new_string(name)?.into_raw())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_desklink_android_NativeBridge_keyboardPair(
+    mut env: JNIEnv,
+    _: JClass,
+    path: JString,
+    code: JString,
+) -> jstring {
+    guard(&mut env, ptr::null_mut(), |env| {
+        let (path, code) = (dir(env, &path)?, text(env, &code)?);
+        let name = profile::pair_keyboard(&path, &code)?;
+        Ok(env.new_string(name)?.into_raw())
+    })
+}
+
+/// `width`x`height` is the controlled screen in the units its pointer uses (macOS points).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_desklink_android_NativeBridge_keyboardStart(
+    mut env: JNIEnv,
+    _: JClass,
+    path: JString,
+    width: jint,
+    height: jint,
+    relative: jboolean,
+    swap_control_and_command: jboolean,
+) {
+    guard(&mut env, (), |env| {
+        let path = dir(env, &path)?;
+        keyboard().set_receiver(Receiver::Keyboard(desklink_hid::Options {
+            width: u32::try_from(width).context("negative width")?,
+            height: u32::try_from(height).context("negative height")?,
+            pointer: if relative == JNI_TRUE {
+                desklink_hid::PointerMode::Relative
+            } else {
+                desklink_hid::PointerMode::Absolute
+            },
+            swap_control_and_command: swap_control_and_command == JNI_TRUE,
+        }));
+        keyboard().start(&path)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_desklink_android_NativeBridge_keyboardStop(
+    mut env: JNIEnv,
+    _: JClass,
+) {
+    guard(&mut env, (), |_| {
+        keyboard().stop();
+        Ok(())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_desklink_android_NativeBridge_keyboardStatus(
+    mut env: JNIEnv,
+    _: JClass,
+    path: JString,
+) -> jstring {
+    guard(&mut env, ptr::null_mut(), |env| {
+        let path = dir(env, &path)?;
+        let status = keyboard().status(&path);
+        json(env, &status)
+    })
+}
+
+/// Like `nextActions`, for the keyboard-and-mouse agent: Bluetooth reports to send.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_desklink_android_NativeBridge_keyboardNextActions(
+    mut env: JNIEnv,
+    _: JClass,
+    timeout_ms: jint,
+) -> jbyteArray {
+    guard(&mut env, ptr::null_mut(), |env| {
+        take_actions(env, keyboard(), timeout_ms)
     })
 }

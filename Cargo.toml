@@ -37,6 +37,7 @@ desklink-clipboard = { path = "crates/clipboard" }
 desklink-layout = { path = "crates/layout" }
 desklink-settings = { path = "crates/settings" }
 desklink-ui = { path = "crates/ui" }
+desklink-hid = { path = "crates/hid" }
 
 [profile.release]
 lto = "thin"

@@ -720,6 +720,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "desklink",
+ "desklink-hid",
  "desklink-platform",
  "desklink-protocol",
  "desklink-settings",
@@ -754,6 +755,16 @@ dependencies = [
  "anyhow",
  "desklink-protocol",
  "hex",
+]
+
+[[package]]
+name = "desklink-hid"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "desklink-platform",
+ "desklink-protocol",
+ "tracing",
 ]
 
 [[package]]

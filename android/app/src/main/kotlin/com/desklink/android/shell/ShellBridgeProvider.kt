@@ -10,6 +10,9 @@ import android.os.Process
 import com.desklink.android.NativeBridge
 import com.desklink.android.Network
 import com.desklink.android.Settings
+import com.desklink.android.SharingService
+import com.desklink.android.bluetooth.HidKeyboardMouse
+import com.desklink.android.bluetooth.KeyboardSettings
 
 /**
  * The adb-shell side door. Only the shell user (uid 2000, i.e. a computer the user authorized for
@@ -18,6 +21,9 @@ import com.desklink.android.Settings
  * - `register`: the input helper announces its port and token.
  * - `pairing-code`: prints this phone's public pairing code (used by scripts/android-pair.sh).
  * - `pair`: trusts a computer's pairing code. adb access already implies full device control.
+ * - `keyboard-pair`, `keyboard-pairing-code`: the same for the computer this phone controls as a
+ *   Bluetooth keyboard and mouse.
+ * - `hid-*`: test hooks that drive the Bluetooth keyboard and mouse directly.
  */
 class ShellBridgeProvider : ContentProvider() {
     override fun onCreate() = true
@@ -45,6 +51,49 @@ class ShellBridgeProvider : ContentProvider() {
                 val name = NativeBridge.pair(settings.profileDir, arg ?: "", true)
                 putString("result", "paired $name")
                 com.desklink.android.ProfileEvents.changed()
+            }
+            // The computer this phone controls as a Bluetooth keyboard and mouse (scripts/android-pair.sh --keyboard).
+            "keyboard-pair" -> Bundle().apply {
+                val keyboard = KeyboardSettings(context)
+                NativeBridge.keyboardEnsure(keyboard.profileDir, KeyboardSettings.DEFAULT_NAME)
+                val name = NativeBridge.keyboardPair(keyboard.profileDir, arg ?: "")
+                keyboard.enabled = true
+                SharingService.keyboardChanged(context)
+                putString("result", "paired $name")
+                com.desklink.android.ProfileEvents.changed()
+            }
+            "keyboard-pairing-code" -> Bundle().apply {
+                val keyboard = KeyboardSettings(context)
+                NativeBridge.keyboardEnsure(keyboard.profileDir, KeyboardSettings.DEFAULT_NAME)
+                val info = org.json.JSONObject(NativeBridge.info(keyboard.profileDir, Network.wifiAddress(context)))
+                putString("result", info.getString("pairing_code"))
+            }
+            // Test hooks for the Bluetooth keyboard and mouse; adb already implies full control.
+            "hid-start" -> Bundle().apply {
+                val hid = HidKeyboardMouse.get(context)
+                hid.preferredAddress = arg?.takeIf { it.isNotBlank() }
+                hid.start()
+                putString("result", hid.state.name)
+            }
+            "hid-status" -> Bundle().apply {
+                val hid = HidKeyboardMouse.get(context)
+                putString("result", "${hid.state.name} host=${hid.host?.address ?: "none"}")
+            }
+            // Comma-separated "id:hex" reports, sent 8 ms apart like a real keyboard.
+            "hid-send" -> Bundle().apply {
+                val hid = HidKeyboardMouse.get(context)
+                val reports = (arg ?: "").split(',').filter { it.isNotBlank() }.map { item ->
+                    val (id, hex) = item.trim().split(':', limit = 2).let { it[0].toInt() to it.getOrElse(1) { "" } }
+                    require(hex.length % 2 == 0 && hex.all { it in "0123456789abcdef" }) { "invalid report" }
+                    id to hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                }
+                require(reports.size <= 2000) { "too many reports" }
+                val sent = reports.count { (id, data) -> hid.send(id, data).also { Thread.sleep(8) } }
+                putString("result", "sent $sent of ${reports.size}")
+            }
+            "hid-stop" -> Bundle().apply {
+                HidKeyboardMouse.get(context).stop()
+                putString("result", "stopped")
             }
             else -> throw IllegalArgumentException("unknown method $method")
         }

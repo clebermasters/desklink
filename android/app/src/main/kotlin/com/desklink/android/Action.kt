@@ -10,6 +10,8 @@ sealed interface Action {
     data class Key(val keycode: Int, val meta: Int, val down: Boolean) : Action
     data class Scroll(val horizontal: Int, val vertical: Int) : Action
     class Clipboard(val kind: Int, val data: ByteArray) : Action
+    /** A Bluetooth HID report for the computer the phone presents itself to. */
+    class Report(val id: Int, val data: ByteArray) : Action
 
     companion object {
         /** Mirrors `bridge::encode` in crates/android/src/bridge.rs. */
@@ -28,6 +30,12 @@ sealed interface Action {
                         val data = ByteArray(buffer.int)
                         buffer.get(data)
                         Clipboard(kind, data)
+                    }
+                    7 -> {
+                        val id = buffer.get().toInt() and 0xff
+                        val data = ByteArray(buffer.get().toInt() and 0xff)
+                        buffer.get(data)
+                        Report(id, data)
                     }
                     else -> throw IllegalStateException("unknown action $tag")
                 }

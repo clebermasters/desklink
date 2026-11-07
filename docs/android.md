@@ -80,6 +80,33 @@ Android lets an app read the clipboard only while it is in front, so phone→com
 
 Turn clipboard sharing off under *Options*.
 
+## Computers without Desklink: Bluetooth keyboard and mouse
+
+Some computers can't run Desklink: for example a company-managed Mac where only IT can approve input permissions. The phone can instead act as a **standard Bluetooth keyboard and mouse** for that computer. The computer runs no Desklink software and needs no admin rights: it simply pairs a Bluetooth accessory. A Desklink computer controls it through the phone:
+
+```
+ Linux (desklink run) ── Wi-Fi ──▶ phone ── Bluetooth keyboard + mouse ──▶ Mac
+```
+
+The Bluetooth computer appears in the controlling computer's layout as its own screen. Push the pointer across that edge and your keyboard and mouse drive it; cross back to return. The phone remains a screen of its own as well.
+
+**Set up** (Android 9 or newer):
+
+1. Pair the phone with the Desklink computer that will control everything (see above).
+2. In the app, under *Computers*, choose **No Desklink: control it as a Bluetooth keyboard and mouse**. Allow *Nearby devices*, choose the controlling computer, and enter the Bluetooth computer's screen size. On a Mac use the "looks like" size from *System Settings → Displays*, for example 1512 × 982. Leave *It's a Mac* checked for a Mac, so Control acts as ⌘.
+3. Tap **Save and make this phone visible**, then pair the phone from the computer's Bluetooth settings. If the computer had paired with the phone before, remove it there first so it learns about the keyboard and mouse. A Mac may show *Keyboard Setup Assistant*; press the keys it asks for from the controlling computer, or close it.
+4. Give the Bluetooth computer's pairing code to the controlling computer: `desklink pair CODE --edge left`, or *Add computer* in the editor. With adb, `scripts/android-pair.sh --keyboard --edge left` sets up the trust in both directions in one go; set the screen size in the app.
+
+**What works:** pointer (positioned exactly, so crossings line up), left/middle/right buttons, back/forward, wheel and horizontal scrolling, and the full keyboard including shortcuts.
+
+**Limits:**
+- No clipboard: nothing on that computer can send or receive one.
+- One direction: the Bluetooth computer's own keyboard and mouse don't control the others.
+- One Bluetooth computer at a time; the phone must stay in range with sharing on.
+- On a Mac, dragging moves the pointer through macOS acceleration; when you release the button the pointer jumps back to its exact position (being fixed).
+- The computer's keyboard layout setting applies. Desklink sends key positions, as a physical keyboard does.
+- On a managed computer, Bluetooth accessories may be restricted by policy. If pairing is refused, ask IT; don't work around it.
+
 ## Security model
 
 - **Same protocol as the desktop.**
@@ -96,6 +123,10 @@ Turn clipboard sharing off under *Options*.
   - On Android 13+ it does not read window content.
   - On Android 8–12 it reads only the focused text field, to insert typed text.
   - It does not observe accessibility events.
+- **Bluetooth keyboard and mouse.**
+  - It has its own identity and port (24881) and trusts exactly one controlling computer, which must be paired with the phone too. Only that authenticated computer can type on the Bluetooth computer.
+  - The phone presents itself as a keyboard only while sharing is on; Android withdraws the registration when the app leaves the foreground, and Desklink unregisters when sharing stops.
+  - It needs the *Nearby devices* permission, asked for when you set it up.
 - **Logging.** The app never logs key codes, typed text or clipboard contents.
 
 ## Troubleshooting

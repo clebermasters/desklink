@@ -51,6 +51,7 @@ class InputRouter(private val context: Context, private val settings: Settings) 
             is Action.Key -> session?.key(action.keycode, action.meta, action.down)
             is Action.Scroll -> session?.scroll(action.horizontal, action.vertical)
             is Action.Clipboard -> ClipboardSync.apply(context, action.kind, action.data)
+            is Action.Report -> Unit // only the Bluetooth keyboard agent produces reports
         }
     }
 
