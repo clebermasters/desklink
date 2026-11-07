@@ -6,6 +6,8 @@ use serde::Serialize;
 pub mod keymap;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod macos_policy;
 #[cfg(target_os = "linux")]
 mod wayland;
 #[cfg(target_os = "linux")]
@@ -18,6 +20,66 @@ pub enum LocalEvent {
     Clipboard(ClipboardContent),
     CaptureLost,
     Failure(String),
+}
+
+/// Establish modifiers before replaying held shortcuts or mouse buttons on a new screen.
+fn order_held_inputs(held: &mut [Input]) {
+    held.sort_by_key(|input| match input {
+        Input::Key {
+            code: 29 | 42 | 54 | 56 | 97 | 100 | 125 | 126,
+            ..
+        } => 0,
+        Input::Key { .. } => 1,
+        _ => 2,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn held_shortcuts_establish_modifiers_before_the_action_key() {
+        let mut held = vec![
+            Input::Key {
+                code: 20,
+                down: true,
+            },
+            Input::Button {
+                button: 1,
+                down: true,
+            },
+            Input::Key {
+                code: 29,
+                down: true,
+            },
+            Input::Key {
+                code: 42,
+                down: true,
+            },
+        ];
+        order_held_inputs(&mut held);
+        assert_eq!(
+            held,
+            vec![
+                Input::Key {
+                    code: 29,
+                    down: true
+                },
+                Input::Key {
+                    code: 42,
+                    down: true
+                },
+                Input::Key {
+                    code: 20,
+                    down: true
+                },
+                Input::Button {
+                    button: 1,
+                    down: true
+                }
+            ]
+        );
+    }
 }
 
 #[derive(Debug, Serialize)]

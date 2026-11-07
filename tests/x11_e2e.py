@@ -138,8 +138,11 @@ def run(binary):
 
             mouse(a, "mousemove", "400", "300")
             time.sleep(0.2)
+            mouse(a, "keydown", "Control_L", "Shift_L", "t")
             mouse(a, "mousemove", "799", "300")
             wait_for(lambda: "receiving input" in log_text(lb), "screen-edge handoff A→B")
+            wait_for(lambda: "keysym 0x54, T" in log_text(root / "events-B.log"), "held shortcut modifiers precede its action key")
+            mouse(a, "keyup", "t", "Shift_L", "Control_L")
             mouse(a, "mousemove_relative", "--", "50", "20")
             wait_for(lambda: position(b)["X"] > 30, "remote pointer motion")
             mouse(a, "key", "a")

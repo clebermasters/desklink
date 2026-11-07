@@ -1,4 +1,4 @@
-use super::{Desktop, LocalEvent};
+use super::{Desktop, LocalEvent, order_held_inputs};
 use anyhow::{Context, Result, ensure};
 use desklink_protocol::{Geometry, Input};
 use x11rb::protocol::xtest::ConnectionExt as _;
@@ -228,6 +228,7 @@ impl Desktop for X11 {
         }
         let (cx, cy) = self.center();
         self.warp(cx, cy)?;
+        order_held_inputs(&mut held);
         Ok(held)
     }
     fn release(&mut self) -> Result<()> {

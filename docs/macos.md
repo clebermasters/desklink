@@ -2,6 +2,8 @@
 
 The Quartz backend uses a session event tap rather than a root-only HID event tap. It posts input through Core Graphics and uses the native pasteboard for text and images. It does not install a daemon or kernel extension.
 
+Screen handoff snapshots keys and mouse buttons already held in the current login session, with modifiers replayed before shortcut action keys. Caps Lock is treated as latch state rather than a held modifier. Other-button drag events preserve their Quartz button identifier. The conversion and ordering policy has portable regression tests; framework interaction still needs native Mac acceptance testing. These paths use Apple's documented [session key-state query](https://developer.apple.com/documentation/coregraphics/cgeventsource/keystate(_:key:)) and [mouse-event button argument](https://developer.apple.com/documentation/coregraphics/cgevent/init(mouseeventsource:mousetype:mousecursorposition:mousebutton:)).
+
 Build on a Mac with Rust and Xcode command-line tools. The release script can combine the Apple Silicon and Intel builds with `lipo` into one executable inside `Desklink.app`. The bundle's metadata gives the executable a stable application identity for privacy prompts.
 
 Initialize and pair the app from Terminal using `Desklink.app/Contents/MacOS/desklink init` and the `trust` commands in the README. After setup, launching the bundle with no arguments starts sharing. This release provides a CLI rather than a settings window or menu-bar controller; use a user LaunchAgent for managed startup/stop, or the command-line executable in a terminal.

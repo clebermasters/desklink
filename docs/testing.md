@@ -19,7 +19,7 @@ Compile checks do not prove desktop behavior. On a test Mac:
 1. Test with a standard user and record any administrator authorization needed during permission setup.
 2. Grant only the input permissions reported by `desklink doctor`/`permissions`.
 3. Pair with the Linux test computer; exercise both controller and receiver roles.
-4. Verify pointer movement, dragging, all modifier combinations, Command shortcuts, repeat, Caps Lock, scrolling, non-US layouts and multi-monitor coordinates.
+4. Verify pointer movement, dragging, all modifier combinations, Command shortcuts, repeat, Caps Lock, scrolling, non-US layouts and multi-monitor coordinates. Include keys/buttons held before crossing a screen edge, and verify the original application retains no stuck input after returning.
 5. Copy multiline Unicode text and transparent screenshots in both directions.
 6. Test the emergency chord, network loss while modifiers/buttons are held, sleep/wake, permission revocation and restart.
 7. Repeat using the packaged/signed app identity, including upgrade behavior. Do not infer it from permissions granted to Terminal.

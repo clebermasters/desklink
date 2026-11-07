@@ -1,4 +1,7 @@
 //! Quartz session event taps, not root-only HID taps. All handles stay on the desktop thread.
+use super::macos_policy::{
+    held_inputs, modifier_mask, modifier_transition, mouse_motion, quartz_button,
+};
 use super::{Capabilities, Desktop, LocalEvent, keymap};
 use anyhow::{Result, ensure};
 use desklink_protocol::{Geometry, Input};
@@ -52,6 +55,8 @@ unsafe extern "C" {
     fn CGEventCreate(source: Ref) -> Ref;
     fn CGEventGetLocation(event: Ref) -> Point;
     fn CGEventGetFlags(event: Ref) -> u64;
+    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
+    fn CGEventSourceButtonState(state_id: i32, button: u32) -> bool;
     fn CGEventGetIntegerValueField(event: Ref, field: u32) -> i64;
     fn CGEventSetIntegerValueField(event: Ref, field: u32, value: i64);
     fn CGEventSetFlags(event: Ref, flags: u64);
@@ -107,14 +112,8 @@ extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, user: *mut c_void) ->
         if let Some(code) = keymap::from_mac(code)
             && let Ok(mut held) = state.modifiers.lock()
         {
-            let mask = modifier_mask(code);
-            let down = flags & mask != 0 && !held.contains(&code);
-            if down {
-                held.insert(code);
-            } else {
-                held.remove(&code);
-            }
-            input = Some(Input::Key { code, down });
+            input =
+                modifier_transition(code, flags, &mut held).map(|down| Input::Key { code, down });
         }
     } else if kind == 10 || kind == 11 {
         input = keymap::from_mac(code).map(|code| Input::Key {
@@ -187,17 +186,6 @@ extern "C" fn callback(_proxy: Ref, kind: u32, event: Ref, user: *mut c_void) ->
     ptr::null_mut() // suppress local delivery only while sharing to a remote screen
 }
 
-fn modifier_mask(code: u16) -> u64 {
-    match code {
-        42 | 54 => 1 << 17,
-        29 | 97 => 1 << 18,
-        56 | 100 => 1 << 19,
-        125 | 126 => 1 << 20,
-        58 => 1 << 16,
-        _ => 0,
-    }
-}
-
 pub struct MacDesktop {
     tap: Ref,
     source: Ref,
@@ -268,7 +256,9 @@ impl MacDesktop {
             buttons: BTreeSet::new(),
         };
         desktop.geometry = desktop.geometry()?;
-        desktop.last = position()?;
+        let (position, flags) = session_snapshot()?;
+        desktop.last = position;
+        desktop.caps_lock = flags & modifier_mask(58) != 0;
         Ok(desktop)
     }
     fn post(&self, event: Ref) -> Result<()> {
@@ -292,12 +282,17 @@ impl MacDesktop {
 }
 
 fn position() -> Result<(i32, i32)> {
+    Ok(session_snapshot()?.0)
+}
+
+fn session_snapshot() -> Result<((i32, i32), u64)> {
     // SAFETY: create returns an owned event; it is released after reading its location.
     let event = unsafe { CGEventCreate(ptr::null_mut()) };
     ensure!(!event.is_null(), "could not query cursor");
     let p = unsafe { CGEventGetLocation(event) };
+    let flags = unsafe { CGEventGetFlags(event) };
     unsafe { CFRelease(event) };
-    Ok((p.x.round() as i32, p.y.round() as i32))
+    Ok(((p.x.round() as i32, p.y.round() as i32), flags))
 }
 
 impl Desktop for MacDesktop {
@@ -350,7 +345,8 @@ impl Desktop for MacDesktop {
             .map(LocalEvent::Input)
             .collect();
         if !self.state.captured.load(Ordering::Relaxed) {
-            let (x, y) = position()?;
+            let ((x, y), flags) = session_snapshot()?;
+            self.caps_lock = flags & modifier_mask(58) != 0;
             let (dx, dy) = (x - self.last.0, y - self.last.1);
             if dx != 0 || dy != 0 {
                 events.push(LocalEvent::Pointer { x, y, dx, dy });
@@ -366,17 +362,26 @@ impl Desktop for MacDesktop {
             .map_err(|_| anyhow::anyhow!("event queue poisoned"))?
             .clear();
         self.state.captured.store(true, Ordering::Relaxed);
-        Ok(self
+        // Include keys held before the tap was installed or before the cursor crossed an edge.
+        // Caps Lock is a latch, not a held key. State 0 is the current login session.
+        // SAFETY: these read-only queries inspect state in the current user login session.
+        let held = held_inputs(
+            |key| unsafe { CGEventSourceKeyState(0, key) },
+            |button| unsafe { CGEventSourceButtonState(0, button) },
+        );
+        let mut modifiers = self
             .state
             .modifiers
             .lock()
-            .map_err(|_| anyhow::anyhow!("modifier state poisoned"))?
+            .map_err(|_| anyhow::anyhow!("modifier state poisoned"))?;
+        *modifiers = held
             .iter()
-            .map(|code| Input::Key {
-                code: *code,
-                down: true,
+            .filter_map(|input| match input {
+                Input::Key { code, .. } if modifier_mask(*code) != 0 => Some(*code),
+                _ => None,
             })
-            .collect())
+            .collect();
+        Ok(held)
     }
     fn release(&mut self) -> Result<()> {
         self.state.captured.store(false, Ordering::Relaxed);
@@ -385,15 +390,7 @@ impl Desktop for MacDesktop {
     }
     fn warp(&mut self, x: i32, y: i32) -> Result<()> {
         let (x, y) = self.geometry.clamp(x, y);
-        let kind = if self.buttons.contains(&1) {
-            6
-        } else if self.buttons.contains(&3) {
-            7
-        } else if !self.buttons.is_empty() {
-            27
-        } else {
-            5
-        };
+        let (kind, button) = mouse_motion(&self.buttons);
         self.post(unsafe {
             CGEventCreateMouseEvent(
                 ptr::null_mut(),
@@ -402,7 +399,7 @@ impl Desktop for MacDesktop {
                     x: x as f64,
                     y: y as f64,
                 },
-                0,
+                button,
             )
         })?;
         self.last = (x, y);
@@ -442,11 +439,28 @@ impl Desktop for MacDesktop {
                     self.buttons.remove(&button);
                 }
                 let (x, y) = position()?;
-                let (cg, kind) = match button {
-                    1 => (0, if down { 1 } else { 2 }),
-                    3 => (1, if down { 3 } else { 4 }),
-                    2 => (2, if down { 25 } else { 26 }),
-                    _ => (button as u32 - 1, if down { 25 } else { 26 }),
+                let kind = match button {
+                    1 => {
+                        if down {
+                            1
+                        } else {
+                            2
+                        }
+                    }
+                    3 => {
+                        if down {
+                            3
+                        } else {
+                            4
+                        }
+                    }
+                    _ => {
+                        if down {
+                            25
+                        } else {
+                            26
+                        }
+                    }
                 };
                 self.post(unsafe {
                     CGEventCreateMouseEvent(
@@ -456,7 +470,7 @@ impl Desktop for MacDesktop {
                             x: x as f64,
                             y: y as f64,
                         },
-                        cg,
+                        quartz_button(button),
                     )
                 })
             }
