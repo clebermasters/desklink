@@ -30,6 +30,8 @@ The native clipboard service observes text or image changes and normalizes image
 
 The clock imposes a total order on simultaneous changes. Remote changes with older stamps are discarded. Applying a remote change updates the service's last-observed digest so it does not send the same contents back as a new local edit. Portal clipboard ownership signals serve the equivalent role on Wayland.
 
+Clipboard observations also carry a local revision. Applying a remote copy invalidates queued observations immediately, before the native clipboard thread runs. Wayland reads are similarly invalidated when ownership changes, including reads that finished but have not yet been consumed. This prevents a delayed read of old contents from becoming a new logical-clock update and overwriting a newer remote copy.
+
 Control/input messages have priority between clipboard chunks. Slow connections have bounded control queues; an overflow closes the peer rather than silently dropping key releases.
 
 ## Extending backends

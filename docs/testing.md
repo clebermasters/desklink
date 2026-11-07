@@ -8,7 +8,7 @@ Run formatting, Clippy with warnings denied, and the workspace tests. Tests cove
 
 Build `desklink`, then run `python3 tests/x11_e2e.py`. The test launches two independent Xvfb desktops at different resolutions, creates temporary identities, pairs both peers and runs the real application processes.
 
-It verifies real Unicode text and PNG clipboard transfers in both directions, real pointer movement, keyboard input and clicks, screen-edge return, reverse input sharing, crash cleanup and reconnection with the same identity. Input commands always have an explicit private `DISPLAY`. The real desktop is not a test target.
+It verifies real Unicode text and PNG clipboard transfers in both directions, concurrent-copy convergence, real pointer movement, keyboard input and clicks, scrolling, screen-edge return, reverse input sharing, emergency return, crash cleanup and reconnection with the same identity. It also checks clipboard opt-out. Input commands always have an explicit private `DISPLAY`. The real desktop is not a test target.
 
 The script needs Xvfb, xdotool, xclip, xev, `stdbuf`, and Pillow. CI provisions these as test dependencies; running the application does not require them.
 

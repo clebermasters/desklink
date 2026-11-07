@@ -123,6 +123,19 @@ def run(binary):
                 wait_for(lambda: image_matches(destination, data), "bidirectional PNG clipboard")
             print("PASS: PNG image clipboard A→B and B→A retains pixels and alpha", flush=True)
 
+            for attempt in range(3):
+                choices = [f"concurrent A {attempt}: ".encode() + b"a" * 60000,
+                           f"concurrent B {attempt}: ".encode() + b"b" * 60000]
+                copy(a, choices[0])
+                copy(b, choices[1])
+                def converged():
+                    left, right = paste(a), paste(b)
+                    return left == right and left in choices
+                wait_for(converged, "concurrent clipboard copies converge")
+                time.sleep(0.6)
+                assert converged(), "clipboard reverted after concurrent copies converged"
+            print("PASS: concurrent clipboard copies converge without stale-read reverts", flush=True)
+
             mouse(a, "mousemove", "400", "300")
             time.sleep(0.2)
             mouse(a, "mousemove", "799", "300")

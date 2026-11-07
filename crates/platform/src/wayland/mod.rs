@@ -1,6 +1,8 @@
 //! Portal-authorized capture and emulation. Never opens /dev/input or /dev/uinput.
+mod clipboard_reads;
 mod ei;
 mod pipe;
+use clipboard_reads::ClipboardReads;
 
 use super::{Capabilities, Desktop, LocalEvent};
 use anyhow::{Context, Result, ensure};
@@ -320,7 +322,7 @@ async fn worker(
     } else {
         futures_util::stream::pending().right_stream()
     });
-    let mut clipboard_reads: JoinSet<Result<ClipboardContent>> = JoinSet::new();
+    let mut clipboard_reads = ClipboardReads::default();
     let mut clipboard_writes: JoinSet<Result<()>> = JoinSet::new();
     let mut owned: Option<Arc<ClipboardContent>> = None;
     let mut activation: Option<(u32, Instant, (f64, f64))> = None;
@@ -459,7 +461,7 @@ async fn worker(
                         Command::Clipboard(content) => {
                             ensure!(content.valid(), "invalid clipboard content");
                             if let Some(c) = &clipboard {
-                                clipboard_reads.abort_all();
+                                clipboard_reads.invalidate();
                                 let mimes = match content.kind {
                                     ClipboardKind::Text => {
                                         vec!["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"]
@@ -478,9 +480,11 @@ async fn worker(
                 }
                 change=selection.next()=>{
                     let (session, change) = change.context("clipboard portal closed")?;
-                    if session_path(&session)? != remote_path || change.session_is_owner() == Some(true) {
+                    if session_path(&session)? != remote_path {
                         continue;
                     }
+                    clipboard_reads.invalidate();
+                    if change.session_is_owner()==Some(true) {continue;}
                     let mime = if change.mime_types().iter().any(|m| m == "image/png") {
                         Some(("image/png", ClipboardKind::Png))
                     } else if change
@@ -494,10 +498,9 @@ async fn worker(
                     } else {
                         None
                     };
-                    clipboard_reads.abort_all();
                     if let (Some(c), Some((mime, kind))) = (&clipboard, mime) {
                         let (c, session) = (c.clone(), remote_session.clone());
-                        clipboard_reads.spawn(async move {
+                        clipboard_reads.start(async move {
                             let fd = c.selection_read(&session, mime).await?;
                             let limit = if kind == ClipboardKind::Text {
                                 MAX_TEXT
@@ -549,8 +552,8 @@ async fn worker(
                         });
                     }
                 }
-                read=clipboard_reads.join_next(),if !clipboard_reads.is_empty()=>{
-                    if let Some(Ok(Ok(content))) = read {
+                read=clipboard_reads.next(),if !clipboard_reads.is_empty()=>{
+                    if let Some(Ok(content)) = read {
                         emit(&events, LocalEvent::Clipboard(content))?;
                     }
                 }
@@ -582,7 +585,7 @@ async fn worker(
             }
         }Ok(())
     }.await;
-    clipboard_reads.abort_all();
+    clipboard_reads.invalidate();
     clipboard_writes.abort_all();
     let _ = capture_session.close().await;
     let _ = remote_session.close().await;

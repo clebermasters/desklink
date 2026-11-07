@@ -188,8 +188,7 @@ pub async fn run(config: Config, identity: Identity) -> Result<()> {
                     }
                 }
                 content=clipboard_update(&mut clipboard)=>{
-                    if let Some(content) = content
-                        && let Some(transfer) = clock.local(content)
+                    if let Some(transfer) = clock.local(content?)
                     {
                         tracing::debug!(kind=?transfer.content.kind,bytes=transfer.content.bytes.len(),"local clipboard changed");
                         for peer in peers.values().filter(|p| p.clipboard) {
@@ -306,9 +305,12 @@ pub async fn run(config: Config, identity: Identity) -> Result<()> {
 
 async fn clipboard_update(
     clipboard: &mut Option<ClipboardService>,
-) -> Option<desklink_protocol::ClipboardContent> {
+) -> Result<desklink_protocol::ClipboardContent> {
     match clipboard {
-        Some(c) => c.updates.recv().await,
+        Some(c) => c
+            .next_change()
+            .await
+            .context("native clipboard worker stopped"),
         None => std::future::pending().await,
     }
 }
