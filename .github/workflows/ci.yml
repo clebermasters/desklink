@@ -21,7 +21,7 @@ jobs:
       - run: cargo +stable build --locked
       - name: Install isolated desktop test dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool xclip x11-utils python3-pil imagemagick libegl1 libgl1-mesa-dri fonts-dejavu-core
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool xclip x11-utils python3-pil imagemagick libxkbcommon-x11-0 libegl1 libgl1-mesa-dri fonts-dejavu-core
       - name: Verify two-desktop input and clipboard sharing
         if: runner.os == 'Linux'
         run: /usr/bin/python3 tests/x11_e2e.py
@@ -51,9 +51,10 @@ jobs:
       - name: Install Android SDK packages
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;36.0.0" "ndk;29.0.14206865"
       - name: Clippy for Android targets
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
-        run: cargo ndk -t arm64-v8a -t x86_64 -P 26 clippy -p desklink-android --release --locked -- -D warnings
+        # ANDROID_HOME is a runner environment variable, not part of the workflow `env` context.
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          cargo ndk -t arm64-v8a -t x86_64 -P 26 clippy -p desklink-android --release --locked -- -D warnings
       - name: Lint and build the app
         working-directory: android
         run: ./gradlew --no-daemon lintDebug assembleDebug assembleRelease
