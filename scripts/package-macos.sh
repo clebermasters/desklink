@@ -7,9 +7,11 @@ cargo build --release --locked --target x86_64-apple-darwin
 desklink_stage="$(mktemp -d)"
 trap 'rm -rf "$desklink_stage"' EXIT
 desklink_app="$desklink_stage/Desklink.app"
-mkdir -p "$desklink_app/Contents/MacOS" dist
+mkdir -p "$desklink_app/Contents/MacOS" "$desklink_app/Contents/Resources/Documentation" dist
 lipo -create target/aarch64-apple-darwin/release/desklink target/x86_64-apple-darwin/release/desklink -output "$desklink_app/Contents/MacOS/desklink"
 cp packaging/macos/Info.plist "$desklink_app/Contents/Info.plist"
+cp README.md LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md "$desklink_app/Contents/Resources/Documentation/"
+cp -R docs examples "$desklink_app/Contents/Resources/Documentation/"
 if test -n "${DESKLINK_SIGN_IDENTITY:-}"; then
   codesign --force --options runtime --timestamp --sign "$DESKLINK_SIGN_IDENTITY" "$desklink_app"
   codesign --verify --strict --verbose=2 "$desklink_app"

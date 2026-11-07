@@ -34,6 +34,8 @@ cargo build --release --locked
 
 The application does not require X11/Qt/OpenSSL development packages on Linux. The X11 and cryptographic client implementations are compiled into the executable. Linux system desktop services are still required; a static musl release can avoid a glibc version dependency.
 
+For a prebuilt Linux archive, extract it and use `./desklink` directly; Rust and a system-wide installation are not required. The commands below use `desklink` for a copy on your `PATH`; substitute `./desklink` when running from the extracted folder. The archive includes the linked documentation and example configuration. Mac bundles include the same documentation under `Contents/Resources/Documentation`.
+
 ## Pair two computers
 
 First initialize each computer:
