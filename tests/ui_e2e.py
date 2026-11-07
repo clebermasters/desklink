@@ -165,7 +165,11 @@ def run(binary, screenshot=None, capture_only=False, wayland=False, sharing=Fals
             wait(lambda: statefile.exists() or gui.poll() is not None, "native window startup", 30)
             assert gui.poll() is None, (root / "gui.log").read_text()
             window = shellwindow if wayland else wait(lambda: mouse("search", "--name", "Desklink.*Screen layout").splitlines()[0], "native window")
-            mouse("windowfocus", "--sync", window)
+            if headless or wayland:
+                mouse("windowfocus", "--sync", window)
+            else:
+                # The window is named before it is mapped; focusing an unmapped window fails.
+                wait(lambda: subprocess.run(["xdotool", "windowfocus", "--sync", window], env=env, capture_output=True).returncode == 0, "mapped native window")
             wait(lambda: len(state()["targets"]) >= 10, "rendered controls")
             if lab_env:
                 Path(lab_env).write_text(json.dumps({"env":env,"root":str(root),"profiles":[str(p) for p in profiles],"state":str(statefile),"keys":keys}))
