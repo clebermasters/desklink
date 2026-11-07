@@ -1,0 +1,19 @@
+[package]
+name = "desklink-settings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+desklink-protocol.workspace = true
+desklink-transport.workspace = true
+directories.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+base64 = "0.22"

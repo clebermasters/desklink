@@ -7,4 +7,5 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+hex.workspace = true
 desklink-protocol.workspace = true

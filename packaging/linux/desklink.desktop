@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Desklink
+Comment=Share your keyboard, mouse and clipboard across computers
+Exec=desklink ui
+Icon=preferences-desktop-display
+Terminal=false
+Categories=Utility;Network;
+StartupWMClass=desklink

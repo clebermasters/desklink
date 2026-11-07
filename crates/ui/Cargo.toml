@@ -1,0 +1,18 @@
+[package]
+name = "desklink-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+desklink-layout.workspace = true
+desklink-settings.workspace = true
+desklink-protocol.workspace = true
+desklink-transport.workspace = true
+eframe = {version="0.37.0",default-features=false,features=["glow","default_fonts","x11","wayland","clipboard"]}
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+raw-window-handle = "0.6"

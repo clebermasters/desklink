@@ -1,4 +1,5 @@
 mod config;
+mod local_control;
 mod runtime;
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
@@ -20,11 +21,17 @@ struct Cli {
     )]
     config: Option<PathBuf>,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open the native screen layout editor.
+    #[cfg(feature = "gui")]
+    Ui {
+        #[arg(long, hide = true)]
+        test_state: Option<PathBuf>,
+    },
     /// Create a computer identity and configuration in your own user profile.
     Init {
         #[arg(long)]
@@ -60,6 +67,10 @@ enum Command {
     },
     /// Print the active configuration file location.
     ConfigPath,
+    /// Show the current sharing agent's status without opening a window.
+    Status,
+    /// Stop this profile's sharing agent and release its input.
+    Stop,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -79,18 +90,39 @@ async fn main() {
 }
 
 async fn execute() -> Result<()> {
-    let mut arguments: Vec<_> = std::env::args_os().collect();
-    if cfg!(target_os = "macos")
-        && arguments.len() == 1
-        && std::env::current_exe()
-            .is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
-    {
-        arguments.push("run".into());
-    }
-    let cli = Cli::parse_from(arguments);
+    let cli = Cli::parse();
     let path = cli.config.unwrap_or(config::default_path()?);
-    match cli.command {
+    let command = match cli.command {
+        Some(command) => command,
+        None => {
+            #[cfg(feature = "gui")]
+            {
+                return desklink_ui::run(path, None);
+            }
+            #[cfg(not(feature = "gui"))]
+            {
+                use clap::CommandFactory;
+                Cli::command().print_help()?;
+                return Ok(());
+            }
+        }
+    };
+    match command {
+        #[cfg(feature = "gui")]
+        Command::Ui { test_state } => desklink_ui::run(path, test_state)?,
         Command::ConfigPath => println!("{}", path.display()),
+        Command::Status => {
+            let status = desklink_settings::control::request(
+                &path,
+                desklink_settings::control::Request::Status,
+            )
+            .unwrap_or_default();
+            println!("{}", serde_json::to_string_pretty(&status)?);
+        }
+        Command::Stop => {
+            desklink_settings::control::request(&path, desklink_settings::control::Request::Stop)?;
+            println!("Sharing stopped.");
+        }
         Command::Doctor => {
             let cap = desklink_platform::capabilities();
             println!(
@@ -126,6 +158,8 @@ async fn execute() -> Result<()> {
                     listen,
                     clipboard: true,
                     peers: Vec::new(),
+                    layout: None,
+                    layout_owner: None,
                 }
                 .save(&path)?;
             }
@@ -180,7 +214,7 @@ async fn execute() -> Result<()> {
             }
             let identity = Identity::load(&config::identity_path(&path))
                 .context("cannot load computer identity")?;
-            runtime::run(config, identity).await?;
+            runtime::run(config, identity, path).await?;
         }
     }
     Ok(())

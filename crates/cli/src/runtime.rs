@@ -4,7 +4,9 @@ use desklink_clipboard::ClipboardService;
 use desklink_core::{ClipboardClock, Effect, Engine};
 use desklink_platform::{Desktop, LocalEvent};
 use desklink_protocol::{Message, VERSION};
+use desklink_settings::control::{PeerStatus, Request, Status};
 use desklink_transport::{Identity, NetworkEvent, PeerHandle, PeerKey, parse_public};
+use std::path::PathBuf;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
@@ -23,9 +25,10 @@ struct Connected {
     clipboard: bool,
 }
 
-pub async fn run(config: Config, identity: Identity) -> Result<()> {
-    let edges: Vec<_> = config.peers.iter().filter_map(|p| p.edge).collect();
-    let mut desktop = desklink_platform::open(&edges, config.clipboard)?;
+pub async fn run(mut config: Config, identity: Identity, profile: PathBuf) -> Result<()> {
+    config.validate_for(identity.public)?;
+    let spans = capture_spans(&config, identity.public);
+    let mut desktop = desklink_platform::open_with_spans(&spans, config.clipboard)?;
     let geometry = desktop.geometry()?;
     let mut clipboard = if config.clipboard && !desktop.owns_clipboard() {
         Some(ClipboardService::start().context("clipboard unavailable; configure clipboard=false or use --no-clipboard to run without it")?)
@@ -50,6 +53,18 @@ pub async fn run(config: Config, identity: Identity) -> Result<()> {
     let identity = Arc::new(identity);
     let trusted = Arc::new(trusted);
     let mut engine = Engine::new(identity.public, geometry, routes);
+    engine.set_controller(
+        config
+            .layout_owner
+            .as_deref()
+            .map(parse_public)
+            .transpose()?,
+    );
+    if let Some(layout) = &config.layout {
+        engine.set_layout(Some(layout.clone()))?;
+    }
+    let mut control = crate::local_control::Server::start(&profile)?;
+    let mut last_error: Option<String> = None;
     let mut clock = ClipboardClock::new(identity.public);
     let mut peers: HashMap<PeerKey, Connected> = HashMap::new();
     let active = Arc::new(Mutex::new(HashSet::new()));
@@ -151,6 +166,35 @@ pub async fn run(config: Config, identity: Identity) -> Result<()> {
                 _=tokio::signal::ctrl_c()=>break,
                 _=term.recv()=>break,
                 _=shutdown.cancelled()=>break,
+                request=control.incoming.recv()=>{
+                    let Some(envelope)=request else{break;};
+                    let mut response=status(&config,&engine,&peers,last_error.clone());
+                    match envelope.request {
+                        Request::Status=>{},
+                        Request::Stop=>{
+                            let effects=engine.abort();let _=apply(effects,&mut engine,&mut *desktop,&peers);
+                            response.running=false;let _=envelope.reply.send(response);
+                            let _=timeout(Duration::from_millis(300),envelope.sent).await;break;
+                        }
+                        Request::Apply=>{
+                            let result:Result<_>=(||{let next=Config::load(&profile)?;next.validate_for(identity.public)?;Ok(next)})();
+                            match result {
+                                Ok(next)=>{
+                                    if restart_needed(&config,&next) || (!desktop.can_update_capture_spans() && capture_spans(&config,identity.public)!=capture_spans(&next,identity.public)) {response.restart_required=true;response.error=Some("Restart sharing to apply computer settings or changed desktop capture edges.".into());}
+                                    else {
+                                        let effects=engine.set_layout(next.layout.clone())?;
+                                        apply(effects,&mut engine,&mut *desktop,&peers)?;
+                                        desktop.set_capture_spans(&capture_spans(&next,identity.public))?;config=next;last_error=None;
+                                        publish_layout(&config,&peers,identity.public);
+                                        response=status(&config,&engine,&peers,None);
+                                    }
+                                }
+                                Err(error)=>response.error=Some(error.to_string()),
+                            }
+                        }
+                    }
+                    let _=envelope.reply.send(response);Vec::new()
+                }
                 _=tick.tick()=>{
                     let mut effects = engine.tick();
                     for event in desktop.poll()? {
@@ -225,6 +269,9 @@ pub async fn run(config: Config, identity: Identity) -> Result<()> {
                             if can_clipboard && let Some(content) = clock.current() {
                                 handle.clipboard(content);
                             }
+                            let key_hex=hex::encode(key);
+                            if let Some(layout)=&config.layout &&layout.owner==hex::encode(identity.public)&&layout.screen(&key_hex).is_some(){handle.send(Message::LayoutUpdate(layout.clone()))?;}
+                            else if config.layout_owner.as_ref()==Some(&key_hex){handle.send(Message::LayoutRequest)?;}
                             tracing::info!(peer=%name,key=%hex::encode(key),"peer connected");
                             peers.insert(
                                 key,
@@ -256,6 +303,24 @@ pub async fn run(config: Config, identity: Identity) -> Result<()> {
                             if peers.get(&key).is_none_or(|p| p.handle.id != id) {
                                 continue;
                             }
+                            if matches!(message,Message::LayoutRequest) {
+                                if let Some(layout)=&config.layout&&layout.owner==hex::encode(identity.public)&&layout.screen(&hex::encode(key)).is_some(){peers[&key].handle.send(Message::LayoutUpdate(layout.clone()))?;}
+                                continue;
+                            }
+                            if let Message::LayoutUpdate(layout)=message {
+                                let owner=hex::encode(key);
+                                if config.layout_owner.as_ref()!=Some(&owner)||layout.owner!=owner {tracing::debug!("Ignored layout from a computer that is not the selected controller.");continue;}
+                                if config.layout.as_ref().is_some_and(|current|current.revision>=layout.revision){continue;}
+                                let result=Config::modify(&profile,|next|next.accept_layout(identity.public,key,layout.clone()));
+                                match result {
+                                    Ok(next)=>{
+                                        let effects=engine.set_layout(next.layout.clone())?;config.layout=next.layout;last_error=None;
+                                        tracing::info!("Controller layout synchronized");
+                                        effects
+                                    }
+                                    Err(error)=>{last_error=Some(error.to_string());Vec::new()}
+                                }
+                            }else{
                             match engine.remote(key, message) {
                                 Ok(e) => e,
                                 Err(error) => {
@@ -263,6 +328,7 @@ pub async fn run(config: Config, identity: Identity) -> Result<()> {
                                     peers[&key].handle.cancel.cancel();
                                     engine.disconnected(key)
                                 }
+                            }
                             }
                         }
                         NetworkEvent::Clipboard { key, id, transfer } => {
@@ -301,6 +367,57 @@ pub async fn run(config: Config, identity: Identity) -> Result<()> {
     while tasks.join_next().await.is_some() {}
     tracing::info!("sharing stopped");
     result
+}
+
+fn status(
+    config: &Config,
+    engine: &Engine,
+    peers: &HashMap<PeerKey, Connected>,
+    error: Option<String>,
+) -> Status {
+    Status {
+        running: true,
+        name: config.name.clone(),
+        peers: config
+            .peers
+            .iter()
+            .map(|peer| PeerStatus {
+                public_key: peer.public_key.clone(),
+                name: peer.name.clone(),
+                connected: parse_public(&peer.public_key).is_ok_and(|key| peers.contains_key(&key)),
+            })
+            .collect(),
+        active_computer: engine.active_computer().map(hex::encode),
+        layout_revision: config.layout.as_ref().map(|l| l.revision),
+        layout_owner: config
+            .layout_owner
+            .clone()
+            .or_else(|| config.layout.as_ref().map(|l| l.owner.clone())),
+        clipboard: config.clipboard,
+        error,
+        restart_required: false,
+    }
+}
+
+fn restart_needed(a: &Config, b: &Config) -> bool {
+    a.name != b.name
+        || a.listen != b.listen
+        || a.clipboard != b.clipboard
+        || serde_json::to_value(&a.peers).ok() != serde_json::to_value(&b.peers).ok()
+        || a.layout_owner != b.layout_owner
+        || a.layout.is_some() != b.layout.is_some()
+}
+
+fn publish_layout(config: &Config, peers: &HashMap<PeerKey, Connected>, own: PeerKey) {
+    if let Some(layout) = &config.layout
+        && layout.owner == hex::encode(own)
+    {
+        for (key, peer) in peers {
+            if layout.screen(&hex::encode(key)).is_some() {
+                let _ = peer.handle.send(Message::LayoutUpdate(layout.clone()));
+            }
+        }
+    }
 }
 
 async fn clipboard_update(
@@ -354,6 +471,26 @@ fn apply(
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+fn capture_spans(config: &Config, own: [u8; 32]) -> Vec<desklink_protocol::CaptureSpan> {
+    let own = hex::encode(own);
+    if config
+        .layout_owner
+        .as_ref()
+        .is_some_and(|owner| *owner != own)
+    {
+        return vec![];
+    }
+    if let Some(layout) = &config.layout {
+        layout.capture_spans(&own)
+    } else {
+        config
+            .peers
+            .iter()
+            .filter_map(|peer| peer.edge.map(desklink_protocol::CaptureSpan::full))
+            .collect()
+    }
 }
 
 #[cfg(test)]

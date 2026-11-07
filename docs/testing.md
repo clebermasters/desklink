@@ -16,6 +16,8 @@ The script needs Xvfb, xdotool, xclip, xev, `stdbuf`, and Pillow. CI provisions 
 
 Compile checks do not prove desktop behavior. On a test Mac:
 
+The 0.2 UI has deliberately not been built for macOS during the Linux implementation phase. Resume these checks when the user's Mac is available.
+
 1. Test with a standard user and record any administrator authorization needed during permission setup.
 2. Grant only the input permissions reported by `desklink doctor`/`permissions`.
 3. Pair with the Linux test computer; exercise both controller and receiver roles.
@@ -29,3 +31,29 @@ Compile checks do not prove desktop behavior. On a test Mac:
 Use a desktop with InputCapture, RemoteDesktop and EIS support. Clipboard integration also requires the Clipboard portal. Verify portal interface availability, explicit user grants, both controller/receiver roles, each configured edge, text/images, rejected grants, capture deactivation and clean shutdown. Test GNOME and KDE separately; a generic Wayland version is not a sufficient compatibility claim.
 
 Keep exact desktop, compositor and portal package versions with any result. A private/nested desktop or test account is preferred over automating an active personal desktop.
+
+## Layout and graphical controls
+
+`python3 tests/layout_e2e.py` runs three real agents on private Xvfb desktops. It checks controller-only layout synchronization, A→B→C→B→A traversal with held Control, live topology changes and an offline target. The receivers trust only the controller; layout synchronization must not expand that trust.
+
+`python3 tests/ui_e2e.py --sharing` drives the real native window with pointer input. It checks drag/snapping, save/reload, overlap rejection without overwriting the file, pairing, Start/Stop and live saving to connected agents. `--screenshot /path/editor.png` records the rendered window. The hidden `--test-state` application option exposes rendered control bounds and public status for the test driver; it never exposes clipboard data, input contents or private keys.
+
+The Wayland test image isolates GNOME, D-Bus, graphics, profiles and clipboard from the real desktop:
+
+```sh
+docker build -f tests/environments/wayland.Dockerfile -t desklink-wayland-test .
+docker run --rm --init --user 1000:1000 --network none \
+  --mount type=bind,src="$PWD",dst=/workspace,readonly \
+  desklink-wayland-test python3 tests/ui_e2e.py --wayland
+```
+
+That command verifies the actual native Wayland window handle and editor gestures in nested GNOME. Nested GNOME 48 does not implement the barriers needed for input capture. To exercise the portal agent use its native headless backend instead:
+
+```sh
+docker run --rm --init --user 1000:1000 --network none \
+  --mount type=bind,src="$PWD",dst=/workspace,readonly \
+  desklink-wayland-test python3 tests/ui_e2e.py \
+    --wayland --headless --sharing --approve-gnome
+```
+
+The test driver creates virtual input devices exclusively in its private compositor. `--approve-gnome` clicks the real GNOME 48 consent dialogs after they render; it does not replace portal responses or modify permission storage. That consent automation depends on the pinned test image's 1600×1000 layout. It is not part of Desklink or a method for bypassing user approval. The application and all desktop test processes run as UID 1000.

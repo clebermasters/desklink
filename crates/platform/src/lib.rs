@@ -1,6 +1,6 @@
 //! Desktop-session input API. No privileged helpers or raw kernel input device access.
 use anyhow::Result;
-use desklink_protocol::{ClipboardContent, Edge, Geometry, Input};
+use desklink_protocol::{CaptureSpan, ClipboardContent, Edge, Geometry, Input};
 use serde::Serialize;
 
 pub mod keymap;
@@ -93,6 +93,12 @@ pub struct Capabilities {
 
 /// Owned by the main desktop thread; platform callbacks never perform network I/O.
 pub trait Desktop {
+    fn can_update_capture_spans(&self) -> bool {
+        true
+    }
+    fn set_capture_spans(&mut self, _spans: &[CaptureSpan]) -> Result<()> {
+        Ok(())
+    }
     fn geometry(&mut self) -> Result<Geometry>;
     fn poll(&mut self) -> Result<Vec<LocalEvent>>;
     fn capture(&mut self) -> Result<Vec<Input>>;
@@ -108,16 +114,21 @@ pub trait Desktop {
 }
 
 pub fn open(edges: &[Edge], clipboard: bool) -> Result<Box<dyn Desktop>> {
+    let spans: Vec<_> = edges.iter().map(|edge| CaptureSpan::full(*edge)).collect();
+    open_with_spans(&spans, clipboard)
+}
+
+pub fn open_with_spans(spans: &[CaptureSpan], clipboard: bool) -> Result<Box<dyn Desktop>> {
     #[cfg(target_os = "linux")]
     {
         if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
-            return Ok(Box::new(wayland::Wayland::open(edges.to_vec(), clipboard)?));
+            return Ok(Box::new(wayland::Wayland::open(spans.to_vec(), clipboard)?));
         }
         Ok(Box::new(x11::X11::open()?))
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = (edges, clipboard);
+        let _ = (spans, clipboard);
         Ok(Box::new(macos::MacDesktop::open()?))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]

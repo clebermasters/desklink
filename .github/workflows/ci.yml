@@ -8,7 +8,8 @@ jobs:
   rust:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macOS UI acceptance is deferred until a native test Mac is available.
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -20,22 +21,32 @@ jobs:
       - run: cargo +stable build --locked
       - name: Install isolated desktop test dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool xclip x11-utils python3-pil
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool xclip x11-utils python3-pil imagemagick libegl1 libgl1-mesa-dri fonts-dejavu-core
       - name: Verify two-desktop input and clipboard sharing
         if: runner.os == 'Linux'
         run: /usr/bin/python3 tests/x11_e2e.py
+      - name: Verify shared layout and native UI
+        run: |
+          /usr/bin/python3 tests/layout_e2e.py
+          /usr/bin/python3 tests/ui_e2e.py --sharing
+      - name: Build isolated Wayland desktop
+        run: docker build -f tests/environments/wayland.Dockerfile -t desklink-wayland-test .
+      - name: Verify native Wayland editor
+        run: docker run --rm --init --user 1000:1000 --network none --mount type=bind,src="$PWD",dst=/workspace,readonly desklink-wayland-test python3 tests/ui_e2e.py --wayland
+      - name: Verify GNOME portal permissions, input and clipboard
+        run: docker run --rm --init --user 1000:1000 --network none --mount type=bind,src="$PWD",dst=/workspace,readonly desklink-wayland-test python3 tests/ui_e2e.py --wayland --headless --sharing --approve-gnome
   static-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - run: rustup target add x86_64-unknown-linux-musl
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - run: cargo build -p desklink --release --locked --no-default-features --target x86_64-unknown-linux-musl
       - name: Verify no dynamic library dependencies
         run: |
           file target/x86_64-unknown-linux-musl/release/desklink
           if readelf -l target/x86_64-unknown-linux-musl/release/desklink | grep -q INTERP; then exit 1; fi
       - uses: actions/upload-artifact@v7
         with:
-          name: desklink-linux-x86_64
+          name: desklink-linux-x86_64-headless
           path: target/x86_64-unknown-linux-musl/release/desklink

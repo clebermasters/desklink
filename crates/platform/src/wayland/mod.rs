@@ -1,25 +1,24 @@
 //! Portal-authorized capture and emulation. Never opens /dev/input or /dev/uinput.
+mod barriers;
 mod clipboard_reads;
 mod ei;
 mod pipe;
+mod selection;
 use clipboard_reads::ClipboardReads;
 
 use super::{Capabilities, Desktop, LocalEvent};
 use anyhow::{Context, Result, ensure};
 use ashpd::desktop::{
     clipboard::{Clipboard, SetSelectionOptions},
-    input_capture::{
-        self as capture, ActivatedBarrier, Barrier, BarrierID, BarrierPosition, InputCapture,
-    },
+    input_capture::{self as capture, ActivatedBarrier, InputCapture},
     remote_desktop::{DeviceType, RemoteDesktop, SelectDevicesOptions},
 };
 use desklink_protocol::{
-    ClipboardContent, ClipboardKind, Edge, Geometry, Input, MAX_CLIPBOARD, MAX_TEXT,
+    CaptureSpan, ClipboardContent, ClipboardKind, Edge, Geometry, Input, MAX_CLIPBOARD, MAX_TEXT,
 };
 use futures_util::StreamExt;
 use reis::event::EiEvent;
 use std::{
-    collections::HashMap,
     os::unix::net::UnixStream,
     sync::{Arc, Mutex, mpsc as stdmpsc},
     thread,
@@ -36,6 +35,7 @@ enum Command {
 }
 
 pub struct Wayland {
+    spans: Vec<CaptureSpan>,
     commands: mpsc::Sender<Command>,
     events: stdmpsc::Receiver<LocalEvent>,
     geometry: Arc<Mutex<Geometry>>,
@@ -43,7 +43,7 @@ pub struct Wayland {
 }
 
 impl Wayland {
-    pub fn open(edges: Vec<Edge>, clipboard: bool) -> Result<Self> {
+    pub fn open(spans: Vec<CaptureSpan>, clipboard: bool) -> Result<Self> {
         let (commands, rx) = mpsc::channel(256);
         let (tx, events) = stdmpsc::sync_channel(1024);
         let (ready_tx, ready) = stdmpsc::sync_channel(1);
@@ -54,6 +54,7 @@ impl Wayland {
             height: 4,
         }));
         let shared = geometry.clone();
+        let initial_spans = spans.clone();
         thread::Builder::new()
             .name("desklink-wayland".into())
             .spawn(move || {
@@ -63,7 +64,7 @@ impl Wayland {
                     .map_err(anyhow::Error::from)
                     .and_then(|runtime| {
                         runtime.block_on(worker(
-                            edges,
+                            spans,
                             clipboard,
                             rx,
                             tx.clone(),
@@ -83,6 +84,7 @@ impl Wayland {
             .context("Wayland approval timed out; approve the input portal dialogs and retry")?
             .map_err(anyhow::Error::msg)?;
         Ok(Self {
+            spans: initial_spans,
             commands,
             events,
             geometry,
@@ -97,6 +99,19 @@ impl Wayland {
 }
 
 impl Desktop for Wayland {
+    // GNOME 48 discards capture device references on Disable, while the portal
+    // permits ConnectToEIS only once. Reauthorize with a fresh session instead.
+    fn can_update_capture_spans(&self) -> bool {
+        false
+    }
+    fn set_capture_spans(&mut self, spans: &[CaptureSpan]) -> Result<()> {
+        ensure!(
+            spans == self.spans,
+            "Restart sharing to apply changed Wayland capture edges."
+        );
+        Ok(())
+    }
+
     fn geometry(&mut self) -> Result<Geometry> {
         Ok(*self
             .geometry
@@ -109,7 +124,12 @@ impl Desktop for Wayland {
             match self.events.try_recv() {
                 Ok(e) => events.push(e),
                 Err(stdmpsc::TryRecvError::Empty) => break,
-                Err(stdmpsc::TryRecvError::Disconnected) => anyhow::bail!("Wayland session ended"),
+                Err(stdmpsc::TryRecvError::Disconnected) => {
+                    if events.is_empty() {
+                        anyhow::bail!("Wayland session ended");
+                    }
+                    break;
+                }
             }
         }
         Ok(events)
@@ -171,7 +191,7 @@ fn emit(tx: &stdmpsc::SyncSender<LocalEvent>, event: LocalEvent) -> Result<()> {
 }
 
 async fn worker(
-    edges: Vec<Edge>,
+    spans: Vec<CaptureSpan>,
     use_clipboard: bool,
     mut commands: mpsc::Receiver<Command>,
     events: stdmpsc::SyncSender<LocalEvent>,
@@ -240,19 +260,8 @@ async fn worker(
         .handshake_tokio("Desklink input", reis::ei::handshake::ContextType::Sender)
         .await?;
     let mut injection = ei::Injector::new(sender_connection);
-    let fd = capture
-        .connect_to_eis(&capture_session, Default::default())
-        .await?;
-    let stream = UnixStream::from(fd);
-    stream.set_nonblocking(true)?;
-    let receiver_context = reis::ei::Context::new(stream)?;
-    receiver_context.flush()?;
-    let (receiver_connection, mut receiver_events) = receiver_context
-        .handshake_tokio(
-            "Desklink capture",
-            reis::ei::handshake::ContextType::Receiver,
-        )
-        .await?;
+    let (receiver_connection, mut receiver_events) =
+        capture_stream(&capture, &capture_session).await?;
     let zones = capture
         .zones(&capture_session, Default::default())
         .await?
@@ -261,35 +270,7 @@ async fn worker(
     *shared
         .lock()
         .map_err(|_| anyhow::anyhow!("geometry lock poisoned"))? = geometry;
-    let mut barriers = Vec::new();
-    let mut barrier_edges = HashMap::new();
-    for region in zones.regions() {
-        for edge in &edges {
-            let (x, y, w, h) = (
-                region.x_offset(),
-                region.y_offset(),
-                region.width() as i32,
-                region.height() as i32,
-            );
-            let line = match edge {
-                Edge::Left if x == geometry.x => Some((x, y, x, y + h - 1)),
-                Edge::Right if x + w == geometry.x + geometry.width as i32 => {
-                    Some((x + w, y, x + w, y + h - 1))
-                }
-                Edge::Top if y == geometry.y => Some((x, y, x + w - 1, y)),
-                Edge::Bottom if y + h == geometry.y + geometry.height as i32 => {
-                    Some((x, y + h, x + w - 1, y + h))
-                }
-                _ => None,
-            };
-            if let Some((x1, y1, x2, y2)) = line {
-                let id =
-                    BarrierID::new((barriers.len() + 1) as u32).context("invalid barrier id")?;
-                barriers.push(Barrier::new(id, BarrierPosition::new(x1, y1, x2, y2)));
-                barrier_edges.insert(id, *edge);
-            }
-        }
-    }
+    let (barriers, barrier_edges) = barriers::build(zones.regions(), geometry, &spans)?;
     let mut activated = capture.receive_activated().await?;
     let mut deactivated = capture.receive_deactivated().await?;
     let mut disabled = capture.receive_disabled().await?;
@@ -309,16 +290,14 @@ async fn worker(
     );
     capture.enable(&capture_session, Default::default()).await?;
     let mut selection = Box::pin(if let Some(c) = &clipboard {
-        c.receive_selection_owner_changed::<RemoteDesktop>()
+        c.receive_signal("SelectionOwnerChanged")
             .await?
             .left_stream()
     } else {
         futures_util::stream::pending().right_stream()
     });
     let mut transfers = Box::pin(if let Some(c) = &clipboard {
-        c.receive_selection_transfer::<RemoteDesktop>()
-            .await?
-            .left_stream()
+        c.receive_signal("SelectionTransfer").await?.left_stream()
     } else {
         futures_util::stream::pending().right_stream()
     });
@@ -408,11 +387,11 @@ async fn worker(
                     }
                 }
                 signal=disabled.next()=>{
-                    signal.context("capture portal closed")?;
-                    activation = None;
-                    sharing = false;
-                    emit(&events, LocalEvent::CaptureLost)?;
-                    capture.enable(&capture_session, Default::default()).await?;
+                    let signal=signal.context("capture portal closed")?;
+                    if signal.session_handle().as_str()==capture_path {
+                        emit(&events, LocalEvent::CaptureLost)?;
+                        anyhow::bail!("The desktop disabled input capture. Start sharing again to request a fresh permission session.");
+                    }
                 }
                 _=zones_changed.next()=>anyhow::bail!("display layout changed; restart sharing to reauthorize the capture zones"),
                 event=sender_events.next()=>{
@@ -479,21 +458,22 @@ async fn worker(
                     }
                 }
                 change=selection.next()=>{
-                    let (session, change) = change.context("clipboard portal closed")?;
-                    if session_path(&session)? != remote_path {
+                    let change = selection::parse(&change.context("clipboard portal closed")?)?;
+                    if change.session.as_str() != remote_path {
                         continue;
                     }
+                    tracing::debug!(formats=change.mimes.len(),owner=change.owner,"portal clipboard selection changed");
                     clipboard_reads.invalidate();
-                    if change.session_is_owner()==Some(true) {continue;}
-                    let mime = if change.mime_types().iter().any(|m| m == "image/png") {
+                    if change.owner {continue;}
+                    let mime = if change.mimes.iter().any(|m| m == "image/png") {
                         Some(("image/png", ClipboardKind::Png))
                     } else if change
-                        .mime_types()
+                        .mimes
                         .iter()
                         .any(|m| m == "text/plain;charset=utf-8")
                     {
                         Some(("text/plain;charset=utf-8", ClipboardKind::Text))
-                    } else if change.mime_types().iter().any(|m| m == "text/plain") {
+                    } else if change.mimes.iter().any(|m| m == "text/plain") {
                         Some(("text/plain", ClipboardKind::Text))
                     } else {
                         None
@@ -516,8 +496,8 @@ async fn worker(
                     }
                 }
                 transfer=transfers.next()=>{
-                    let (session, mime, serial) = transfer.context("clipboard portal closed")?;
-                    if session_path(&session)? != remote_path {
+                    let (session,mime,serial):(ashpd::zvariant::OwnedObjectPath,String,u32)=transfer.context("clipboard portal closed")?.body().deserialize()?;
+                    if session.as_str() != remote_path {
                         continue;
                     }
                     if let (Some(c), Some(content)) = (&clipboard, &owned) {
@@ -553,8 +533,10 @@ async fn worker(
                     }
                 }
                 read=clipboard_reads.next(),if !clipboard_reads.is_empty()=>{
-                    if let Some(Ok(content)) = read {
-                        emit(&events, LocalEvent::Clipboard(content))?;
+                    match read {
+                        Some(Ok(content))=>emit(&events,LocalEvent::Clipboard(content))?,
+                        Some(Err(error))=>tracing::warn!(%error,"clipboard owner could not be read"),
+                        None=>{},
                     }
                 }
                 _=clipboard_writes.join_next(),if !clipboard_writes.is_empty()=>{
@@ -590,6 +572,27 @@ async fn worker(
     let _ = capture_session.close().await;
     let _ = remote_session.close().await;
     result
+}
+
+async fn capture_stream(
+    capture: &InputCapture,
+    session: &ashpd::desktop::Session<InputCapture>,
+) -> Result<(reis::event::Connection, reis::tokio::EiConvertEventStream)> {
+    let fd = capture.connect_to_eis(session, Default::default()).await?;
+    let stream = UnixStream::from(fd);
+    stream.set_nonblocking(true)?;
+    let context = reis::ei::Context::new(stream)?;
+    context.flush()?;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        context.handshake_tokio(
+            "Desklink capture",
+            reis::ei::handshake::ContextType::Receiver,
+        ),
+    )
+    .await
+    .context("Capture event transport timed out")?
+    .context("Capture event transport failed")
 }
 
 fn geometry_from_zones(zones: &[capture::Region]) -> Result<Geometry> {

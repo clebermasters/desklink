@@ -1,10 +1,10 @@
-# Wire protocol v1
+# Wire protocol v2
 
-Desklink v1 is independent of the Synergy/Deskflow protocols.
+Desklink v2 is independent of the Synergy/Deskflow protocols and incompatible with Desklink 0.1. Update every paired computer together.
 
 ## Establishment
 
-TCP uses `TCP_NODELAY`. The connection begins with three Noise XX handshake messages using `Noise_XX_25519_ChaChaPoly_BLAKE2s` and prologue `desklink/1`. Each packet uses a network-order 32-bit length prefix. Handshake frames are limited to 4096 bytes and the exchange has a deadline.
+TCP uses `TCP_NODELAY`. The connection begins with three Noise XX handshake messages using `Noise_XX_25519_ChaChaPoly_BLAKE2s` and prologue `desklink/2`. Each packet uses a network-order 32-bit length prefix. Handshake frames are limited to 4096 bytes and the exchange has a deadline.
 
 Both peers maintain explicit trust lists of 32-byte Curve25519 public keys. Unknown keys abort the handshake. There is no trust-on-first-use acceptance and no unauthenticated input path. Identity files are created atomically, kept private to their owner, and validated against the derived public key on load.
 
@@ -17,6 +17,8 @@ The first encrypted message is `Hello`, containing the protocol version, a bound
 `Enter`, `Entered`, `Input`, `Return`, and `Release` carry a handoff token `(controller public key, sequence)`. Keys use physical Linux evdev identifiers; X11 converts to X keycodes and macOS uses an explicit hardware mapping. Text layout interpretation belongs to the destination OS. The protocol does not synthesize Unicode text in place of keyboard shortcuts.
 
 `Ping`/`Pong` keep idle connections alive. Reads have a deadline and stalled writes terminate the session. Geometry changes reset active sharing and advertise the new desktop bounds.
+
+`LayoutUpdate` carries validated logical rectangles, an owner identity and monotonic revision. Receivers accept it only from their explicitly selected, paired controller. It cannot change a trust list. `LayoutRequest` asks that controller for its current arrangement. `Traverse` identifies the active handoff token, exit edge and normalized position; the controller validates the crossing and selects the next directly connected receiver. `TraverseDenied` leaves control on the current computer. A successful switch releases old injected input and creates a new token, preserving the physical source's capture and held keys/buttons.
 
 ## Clipboard
 

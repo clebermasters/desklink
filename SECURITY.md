@@ -4,7 +4,9 @@ Desklink trusts computers that the user has explicitly paired by public key. A p
 
 Connections use the established Noise XX construction implemented by Snow. Peer static keys are verified against a local allowlist before a connection can deliver application messages. Framing, control queues, clipboard sizes and transfer duration are bounded. No command-execution or remote-file-management protocol is exposed.
 
-Clipboard contents are sensitive. They stay in memory, are sent only to paired peers when sharing is enabled, and are excluded from application logs. `--no-clipboard` disables clipboard observation and transfer. Configuration changes, including revoked peer trust, require restarting the running process.
+Clipboard contents are sensitive. They stay in memory, are sent only to paired peers when sharing is enabled, and are excluded from application logs. `--no-clipboard` disables clipboard observation and transfer. X11 layout edits apply live; Wayland capture-span changes require a fresh portal session. Computer, trust and clipboard changes require an agent restart, which the GUI performs when saving those changes. CLI users must restart the agent after trust changes.
+
+Shared layout authority is explicit: a receiver selects one trusted controller. Received layouts cannot add trusted keys. GUI/agent control uses a private Unix socket and configuration writes use a file lock plus an optimistic digest check. A public pairing code contains a name, address and public key only; exchange and verify it through a channel you trust on both computers.
 
 Keep `identity.json` private. Possession of its secret key allows impersonating that computer until the key is removed from every peer. Replacing a lost/compromised identity requires generating and exchanging a new public key.
 

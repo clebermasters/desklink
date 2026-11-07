@@ -3,9 +3,9 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.95"
 license = "MIT"
 
 [workspace.dependencies]
@@ -34,6 +34,9 @@ desklink-transport = { path = "crates/transport" }
 desklink-core = { path = "crates/core" }
 desklink-platform = { path = "crates/platform" }
 desklink-clipboard = { path = "crates/clipboard" }
+desklink-layout = { path = "crates/layout" }
+desklink-settings = { path = "crates/settings" }
+desklink-ui = { path = "crates/ui" }
 
 [profile.release]
 lto = "thin"

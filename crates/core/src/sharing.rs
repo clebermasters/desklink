@@ -1,5 +1,5 @@
 use anyhow::{Result, bail, ensure};
-use desklink_protocol::{Edge, Geometry, Input, Message, Stamp};
+use desklink_protocol::{Edge, Geometry, Input, Layout, Message, Stamp};
 use std::{
     collections::BTreeSet,
     time::{Duration, Instant},
@@ -44,6 +44,10 @@ pub struct Engine {
     connected: BTreeSet<Peer>,
     state: State,
     keys: BTreeSet<u16>,
+    buttons: BTreeSet<u8>,
+    layout: Option<Layout>,
+    controller: Option<Peer>,
+    pending_crossing: Option<Instant>,
     injected_keys: BTreeSet<u16>,
     injected_buttons: BTreeSet<u8>,
     cooldown: Instant,
@@ -59,10 +63,34 @@ impl Engine {
             connected: BTreeSet::new(),
             state: State::Local,
             keys: BTreeSet::new(),
+            buttons: BTreeSet::new(),
+            layout: None,
+            controller: None,
+            pending_crossing: None,
             injected_keys: BTreeSet::new(),
             injected_buttons: BTreeSet::new(),
             cooldown: Instant::now(),
         }
+    }
+    pub fn set_controller(&mut self, controller: Option<Peer>) {
+        self.controller = controller;
+    }
+    pub fn set_layout(&mut self, layout: Option<Layout>) -> Result<Vec<Effect>> {
+        if let Some(layout) = &layout {
+            layout.validate()?;
+            ensure!(
+                layout.screen(&hex::encode(self.own)).is_some(),
+                "This computer is missing from the layout."
+            );
+            self.controller = Some(layout_peer(&layout.owner)?);
+        }
+        let effects = if matches!(self.state, State::Local) {
+            Vec::new()
+        } else {
+            self.abort()
+        };
+        self.layout = layout;
+        Ok(effects)
     }
     pub fn connected(&mut self, peer: Peer) {
         self.connected.insert(peer);
@@ -81,20 +109,53 @@ impl Engine {
             State::Sending { peer, .. } | State::Receiving { peer, .. } => Some(peer),
         }
     }
+    pub fn active_computer(&self) -> Option<Peer> {
+        match self.state {
+            State::Sending { peer, .. } => Some(peer),
+            State::Receiving { .. } => Some(self.own),
+            State::Local => {
+                if self.controller.is_some_and(|p| p != self.own) {
+                    None
+                } else {
+                    Some(self.own)
+                }
+            }
+        }
+    }
     pub fn pointer(&mut self, x: i32, y: i32, dx: i32, dy: i32) -> Vec<Effect> {
+        if self
+            .controller
+            .is_some_and(|controller| controller != self.own)
+        {
+            return Vec::new();
+        }
         if !matches!(self.state, State::Local) || Instant::now() < self.cooldown {
             return Vec::new();
         }
         let Some((edge, position)) = self.geometry.edge_at(x, y, dx, dy) else {
             return Vec::new();
         };
-        let Some(peer) = self
-            .routes
-            .iter()
-            .find(|(e, p)| *e == edge && self.connected.contains(p))
-            .map(|(_, p)| *p)
-        else {
-            return Vec::new();
+        let (peer, entry, position) = if let Some(layout) = &self.layout {
+            let Some(crossing) = layout.crossing(&hex::encode(self.own), edge, position) else {
+                return Vec::new();
+            };
+            let Ok(peer) = layout_peer(&crossing.target) else {
+                return Vec::new();
+            };
+            if !self.connected.contains(&peer) {
+                return Vec::new();
+            }
+            (peer, crossing.entry, crossing.position)
+        } else {
+            let Some(peer) = self
+                .routes
+                .iter()
+                .find(|(e, p)| *e == edge && self.connected.contains(p))
+                .map(|(_, p)| *p)
+            else {
+                return Vec::new();
+            };
+            (peer, edge.opposite(), position)
         };
         self.sequence = self.sequence.wrapping_add(1).max(1);
         let session = Stamp {
@@ -115,7 +176,7 @@ impl Engine {
                 peer,
                 Message::Enter {
                     session,
-                    edge: edge.opposite(),
+                    edge: entry,
                     position,
                 },
             ),
@@ -123,6 +184,16 @@ impl Engine {
         ]
     }
     pub fn local_input(&mut self, event: Input) -> Result<Vec<Effect>> {
+        if !matches!(self.state, State::Sending { .. }) {
+            return Ok(Vec::new());
+        }
+        if let Input::Button { button, down } = event {
+            if down {
+                self.buttons.insert(button);
+            } else {
+                self.buttons.remove(&button);
+            }
+        }
         if let Input::Key { code, down } = event {
             if down {
                 self.keys.insert(code);
@@ -174,6 +245,9 @@ impl Engine {
                 edge,
                 position,
             } => {
+                if self.controller.is_some_and(|controller| controller != peer) {
+                    return Ok(vec![Effect::Send(peer, Message::Release(session))]);
+                }
                 ensure!(
                     session.origin == peer
                         && session.counter > 0
@@ -198,6 +272,8 @@ impl Engine {
                     x,
                     y,
                 };
+                self.pending_crossing = None;
+                self.cooldown = Instant::now();
                 effects.extend([
                     Effect::Warp(x, y),
                     Effect::Send(peer, Message::Entered(session)),
@@ -256,6 +332,32 @@ impl Engine {
                             .geometry
                             .clamp(x.saturating_add(dx), y.saturating_add(dy));
                         if let Some((exit, position)) = self.geometry.edge_at(nx, ny, dx, dy)
+                            && let Some(layout) = &self.layout
+                        {
+                            *x = nx;
+                            *y = ny;
+                            if self.pending_crossing.is_none()
+                                && Instant::now() >= self.cooldown
+                                && layout
+                                    .crossing(&hex::encode(self.own), exit, position)
+                                    .is_some()
+                            {
+                                self.pending_crossing = Some(Instant::now());
+                                return Ok(vec![
+                                    Effect::Warp(nx, ny),
+                                    Effect::Send(
+                                        peer,
+                                        Message::Traverse {
+                                            session: token,
+                                            exit,
+                                            position,
+                                        },
+                                    ),
+                                ]);
+                            }
+                            return Ok(vec![Effect::Warp(nx, ny)]);
+                        }
+                        if let Some((exit, position)) = self.geometry.edge_at(nx, ny, dx, dy)
                             && exit == *edge
                         {
                             let mut effects = self.reset();
@@ -308,6 +410,9 @@ impl Engine {
                     && p == peer
                     && session == token
                 {
+                    if self.layout.is_some() {
+                        return self.follow(peer, token, edge.opposite(), position);
+                    }
                     let (x, y) = self.geometry.entry(edge, position);
                     let mut effects = self.reset();
                     effects.push(Effect::Warp(x, y));
@@ -331,10 +436,108 @@ impl Engine {
                 ensure!(g.valid(), "invalid peer geometry");
                 Ok(Vec::new())
             }
+            Message::Traverse {
+                session,
+                exit,
+                position,
+            } => self.follow(peer, session, exit, position),
+            Message::TraverseDenied(session) => {
+                if matches!(self.state,State::Receiving {peer:p,session:s,..}if p==peer&&s==session)
+                {
+                    self.pending_crossing = None;
+                    self.cooldown = Instant::now() + Duration::from_millis(200);
+                }
+                Ok(Vec::new())
+            }
             _ => bail!("unexpected control message"),
         }
     }
+    fn follow(
+        &mut self,
+        peer: Peer,
+        session: Stamp,
+        exit: Edge,
+        position: f64,
+    ) -> Result<Vec<Effect>> {
+        ensure!(
+            position.is_finite() && (0.0..=1.0).contains(&position),
+            "Invalid screen crossing."
+        );
+        if !matches!(self.state,State::Sending {peer:p,session:s,..}if p==peer&&s==session) {
+            return Ok(Vec::new());
+        }
+        let denied = vec![Effect::Send(peer, Message::TraverseDenied(session))];
+        let Some(layout) = &self.layout else {
+            return Ok(denied);
+        };
+        ensure!(
+            layout_peer(&layout.owner)? == self.own,
+            "Only the controller routes screen crossings."
+        );
+        let Some(crossing) = layout.crossing(&hex::encode(peer), exit, position) else {
+            return Ok(denied);
+        };
+        let target = layout_peer(&crossing.target)?;
+        if target != self.own && !self.connected.contains(&target) {
+            return Ok(denied);
+        }
+        let mut effects = vec![Effect::Send(peer, Message::Release(session))];
+        if target == self.own {
+            let (x, y) = self.geometry.entry(crossing.entry, crossing.position);
+            effects.extend(self.reset());
+            effects.push(Effect::Warp(x, y));
+            return Ok(effects);
+        }
+        self.sequence = self.sequence.wrapping_add(1).max(1);
+        let session = Stamp {
+            origin: self.own,
+            counter: self.sequence,
+        };
+        let mut queued: Vec<_> = self
+            .keys
+            .iter()
+            .map(|code| Input::Key {
+                code: *code,
+                down: true,
+            })
+            .chain(self.buttons.iter().map(|button| Input::Button {
+                button: *button,
+                down: true,
+            }))
+            .collect();
+        queued.sort_by_key(|input| match input {
+            Input::Key {
+                code: 29 | 42 | 54 | 56 | 97 | 100 | 125 | 126,
+                ..
+            } => 0,
+            Input::Key { .. } => 1,
+            _ => 2,
+        });
+        self.state = State::Sending {
+            peer: target,
+            session,
+            edge: exit,
+            ready: false,
+            queued,
+            since: Instant::now(),
+        };
+        effects.push(Effect::Send(
+            target,
+            Message::Enter {
+                session,
+                edge: crossing.entry,
+                position: crossing.position,
+            },
+        ));
+        Ok(effects)
+    }
     pub fn tick(&mut self) -> Vec<Effect> {
+        if self
+            .pending_crossing
+            .is_some_and(|at| at.elapsed() > Duration::from_secs(1))
+        {
+            self.pending_crossing = None;
+        }
         if matches!(&self.state,State::Sending {ready:false,since,..}if since.elapsed()>Duration::from_secs(3))
         {
             self.abort()
@@ -369,6 +572,8 @@ impl Engine {
         self.state = State::Local;
         self.cooldown = Instant::now() + Duration::from_millis(250);
         self.keys.clear();
+        self.buttons.clear();
+        self.pending_crossing = None;
         let mut effects = vec![Effect::ReleaseCapture, Effect::Status("local control")];
         effects.extend(
             std::mem::take(&mut self.injected_keys)
@@ -387,6 +592,12 @@ impl Engine {
         );
         effects
     }
+}
+
+fn layout_peer(id: &str) -> Result<Peer> {
+    hex::decode(id)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Invalid computer identity."))
 }
 
 #[cfg(test)]
@@ -593,5 +804,101 @@ mod tests {
         }
         assert!(matches!(a.state, State::Sending { ready: true, .. }));
         assert!(matches!(b.state, State::Receiving { .. }));
+    }
+
+    fn deliver(nodes: &mut [Engine], sender: usize, effects: Vec<Effect>) -> Vec<(usize, Effect)> {
+        let mut queue: std::collections::VecDeque<_> =
+            effects.into_iter().map(|e| (sender, e)).collect();
+        let mut observed = Vec::new();
+        let mut steps = 0;
+        while let Some((from, effect)) = queue.pop_front() {
+            steps += 1;
+            assert!(steps < 100);
+            if let Effect::Send(target, message) = effect {
+                let source = nodes[from].own;
+                let to = target[0] as usize - 1;
+                let effects = nodes[to].remote(source, message).unwrap();
+                queue.extend(effects.into_iter().map(|e| (to, e)));
+            } else {
+                observed.push((from, effect));
+            }
+        }
+        observed
+    }
+    #[test]
+    fn controller_routes_three_computers_and_preserves_held_input() {
+        let id = |n: u8| hex::encode([n; 32]);
+        let layout = Layout {
+            schema: 1,
+            revision: 1,
+            owner: id(1),
+            screens: (1..=3)
+                .map(|n| desklink_protocol::Screen {
+                    id: id(n),
+                    name: format!("{n}"),
+                    rect: Geometry {
+                        x: (n as i32 - 1) * 240,
+                        y: 0,
+                        width: 240,
+                        height: 150,
+                    },
+                })
+                .collect(),
+        };
+        let mut nodes: Vec<_> = (1..=3)
+            .map(|n| {
+                let mut e = Engine::new([n; 32], g(), vec![]);
+                e.set_layout(Some(layout.clone())).unwrap();
+                e.cooldown = Instant::now();
+                e
+            })
+            .collect();
+        nodes[0].connected([2; 32]);
+        nodes[0].connected([3; 32]);
+        nodes[1].connected([1; 32]);
+        nodes[2].connected([1; 32]);
+        let effects = nodes[0].pointer(799, 300, 10, 0);
+        deliver(&mut nodes, 0, effects);
+        let effects = nodes[0]
+            .local_input(Input::Key {
+                code: 29,
+                down: true,
+            })
+            .unwrap();
+        deliver(&mut nodes, 0, effects);
+        let effects = nodes[0]
+            .local_input(Input::Motion { dx: 1000, dy: 0 })
+            .unwrap();
+        let observed = deliver(&mut nodes, 0, effects);
+        assert!(matches!(
+            nodes[0].state,
+            State::Sending {
+                peer: [3, ..],
+                ready: true,
+                ..
+            }
+        ));
+        assert!(observed.contains(&(
+            1,
+            Effect::Inject(Input::Key {
+                code: 29,
+                down: false
+            })
+        )));
+        assert!(observed.contains(&(
+            2,
+            Effect::Inject(Input::Key {
+                code: 29,
+                down: true
+            })
+        )));
+        assert!(!observed.contains(&(0, Effect::ReleaseCapture)));
+        for _ in 0..2 {
+            let effects = nodes[0]
+                .local_input(Input::Motion { dx: -1000, dy: 0 })
+                .unwrap();
+            deliver(&mut nodes, 0, effects);
+        }
+        assert!(matches!(nodes[0].state, State::Local));
     }
 }

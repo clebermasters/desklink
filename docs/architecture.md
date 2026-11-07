@@ -9,7 +9,10 @@ The workspace separates portable policy from I/O. Platform callbacks and clipboa
 | `desklink-core` | Handoff state machine, held input, edge routing, clipboard logical clock | Operating-system or socket code |
 | `desklink-platform` | X11, Quartz, Wayland input; portal clipboard integration | Peer trust or network protocol |
 | `desklink-clipboard` | Native text/PNG selection ownership and polling on X11/macOS | Remote connection management |
-| `desklink` | CLI, validated configuration, connection supervision, action execution | Platform-specific input mechanics |
+| `desklink-layout` | Logical rectangles, validation, seams, snapping and capture spans | OS pixels, networking or GUI |
+| `desklink-settings` | Shared configuration, atomic saves, pairing codes and local control types | Rendering or capture |
+| `desklink-ui` | Native screen editor, pairing and sharing controls, status | Input injection or networking |
+| `desklink` | CLI, local agent control, connection supervision, action execution | Platform-specific input mechanics |
 
 ## Input lifecycle
 
@@ -17,12 +20,12 @@ The workspace separates portable policy from I/O. Platform callbacks and clipboa
 2. The engine captures local input and sends an `Enter` with a unique session token, destination edge and normalized position.
 3. The receiver positions its pointer, enters receiving state and acknowledges the token.
 4. Until acknowledgment, input is bounded and buffered. Once acknowledged, input is forwarded in order.
-5. Motion updates receiver coordinates. Crossing back through the entry edge returns control to the original computer.
+5. Motion updates receiver coordinates. In a shared arrangement, reaching a seam requests a switch from the controller; it releases the old receiver and sends a new handoff to the next computer. Reaching the controller returns local control. Legacy edge-only profiles return through their entry edge.
 6. Disconnect, a rejected handoff, timeout, capture revocation or the emergency chord resets the engine and releases tracked input.
 
 Sessions contain the controller's public identity plus a monotonically increasing sequence. Delayed acknowledgments, releases and input from an earlier handoff cannot affect a newer handoff. If two users initiate a handoff at the same time, public-key ordering determines which request wins.
 
-Every desktop is one process with an async networking runtime. X11 requests and Quartz callbacks belong to the desktop thread. Native clipboard work runs on its own thread because selection owners may respond slowly. The Wayland worker owns its asynchronous portal sessions, EI connections and clipboard pipes on a separate runtime.
+Every sharing agent is one process with an async networking runtime. The native GUI launches the same executable as a separate agent process and communicates through a private per-profile Unix socket. Closing the GUI leaves an active agent running; Stop sharing ends it. X11 requests and Quartz callbacks belong to the agent's desktop thread. Native clipboard work runs on its own thread because selection owners may respond slowly. The Wayland worker owns its asynchronous portal sessions, EI connections and clipboard pipes on a separate runtime.
 
 ## Clipboard lifecycle
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 — in development
+
+- Native screen-layout UI with shared fonts and controls for Linux and future macOS validation.
+- Drag, resize, snap, validate and save computer arrangements; explicit controller selection and public pairing codes.
+- Live layout synchronization and three-computer routing with held-input transfer and disconnected-target recovery.
+- Start/Stop sharing, connected-computer status, visible text/image clipboard setting and private local agent control.
+- Native X11 and Wayland window backends; precise Wayland capture spans and a fresh permission session when those spans change.
+- GNOME 48 clipboard notification compatibility, verified with native GTK text and transparent PNG sharing in both directions.
+- Protocol v2; update all paired computers together. Native macOS UI builds and tests are deferred.
+- Linux GUI packaging uses a native GNU build; static musl remains available for the headless CLI.
+
 ## 0.1.0 — in development
 
 - Modular Rust engine with native X11 and Quartz backends.

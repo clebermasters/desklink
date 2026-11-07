@@ -142,7 +142,7 @@ async fn handshake(
     trusted: &HashSet<PeerKey>,
 ) -> Result<(PeerKey, snow::TransportState)> {
     let builder = noise(
-        noise(snow::Builder::new(noise(identity::PATTERN.parse())?).prologue(b"desklink/1"))?
+        noise(snow::Builder::new(noise(identity::PATTERN.parse())?).prologue(b"desklink/2"))?
             .local_private_key(identity.private.as_ref()),
     )?;
     let mut state = noise(if outbound {

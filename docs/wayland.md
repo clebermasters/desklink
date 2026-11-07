@@ -8,14 +8,22 @@ Clipboard sharing requires a backend that implements the Clipboard portal and gr
 
 The capture session places pointer barriers on configured outer edges, then receives input over EI after the compositor activates a barrier. If no connected peer takes control, unused capture is released automatically. Capture deactivation resets the sharing state so a source computer is not left forwarding input into a revoked session.
 
+The native GUI uses Wayland window handles directly. Layout seams determine the exact spans armed for capture. When a saved edit changes these spans, the GUI stops sharing cleanly and starts a fresh portal session. Approve the desktop dialogs again. Edits that keep the same capture spans apply without restarting.
+
+This restart handles a limitation observed in GNOME/Mutter 48.7: disabling capture clears its EIS device references, while the portal rejects a second EIS connection on that session. Continuing the existing session can therefore arm a barrier without delivering input. See the [Mutter 48.7 implementation](https://github.com/GNOME/mutter/blob/48.7/src/backends/meta-input-capture-session.c) and the intended [portal lifecycle](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.InputCapture.html). Desklink uses a fresh consent session instead of treating that state as working capture.
+
 Clipboard pipes are asynchronous and nonblocking, with byte limits and timeouts. A stalled clipboard owner therefore does not block the input worker. Selection ownership distinguishes locally copied data from clipboard data applied by Desklink.
 
 Known limitations needing native acceptance testing:
 
 - Compositor/portal versions differ. GNOME and KDE must be tested independently.
 - A display-layout change currently closes the backend with an explicit restart/reauthorization message.
-- Paused or disconnected emulation devices currently end the backend to restore local control; automatic session reconstruction after lock/sleep is not yet implemented.
+- Disabled capture, paused or disconnected emulation devices end the backend to restore local control; automatic session reconstruction after lock/sleep is not yet implemented.
 - Screen-edge placement uses the outer bounds of available zones. Irregular monitor arrangements need additional geometry coverage.
 - Portal permissions are requested at startup; restore tokens are not yet persisted.
 
-Current automated coverage includes a real EI client/server socket exchange, device negotiation, keyboard/pointer/button/scroll frames, fractional pointer accumulation, and bounded/cancellable clipboard pipes. These tests do not substitute for testing the portal permission lifecycle on a real Wayland desktop.
+Native acceptance now covers GNOME 48.7 in an isolated headless compositor: real permission dialogs, native UI gestures, changed-layout reauthorization, capture, keyboard/pointer/buttons/scroll, edge return, native GTK text/PNG clipboard sharing in both directions and the UI's Copy pairing code action. The selection decoder accepts both the documented MIME array and GNOME 48's one-field wrapped array; it consumes transfer notifications directly without silently dropping undecodable events.
+
+The test also switches the controller through the GUI and verifies the receiver role: X11 input reaches a native GTK Wayland text field through EI, with edge return to the controller.
+
+Portable coverage also includes a real EI client/server socket exchange, device negotiation, keyboard/pointer/button/scroll frames, fractional pointer accumulation, and bounded/cancellable clipboard pipes. GNOME results do not establish KDE or other compositor support. See [exact versions and remaining limits](STATUS.md).
