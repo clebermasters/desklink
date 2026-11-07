@@ -1,0 +1,6 @@
+/target/
+/dist/
+/analysis/
+/.local-test/
+*.log
+.DS_Store

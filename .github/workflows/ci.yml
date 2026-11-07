@@ -1,0 +1,41 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  rust:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: cargo +stable fmt --all -- --check
+      - run: cargo +stable clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo +stable test --workspace --locked
+      - run: cargo +stable build --locked
+      - name: Install isolated desktop test dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool xclip x11-utils python3-pil
+      - name: Verify two-desktop input and clipboard sharing
+        if: runner.os == 'Linux'
+        run: /usr/bin/python3 tests/x11_e2e.py
+  static-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Verify no dynamic library dependencies
+        run: |
+          file target/x86_64-unknown-linux-musl/release/desklink
+          if readelf -l target/x86_64-unknown-linux-musl/release/desklink | grep -q INTERP; then exit 1; fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desklink-linux-x86_64
+          path: target/x86_64-unknown-linux-musl/release/desklink

@@ -1,0 +1,14 @@
+[Unit]
+Description=Desklink keyboard, mouse and clipboard sharing
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart="%h/.local/bin/desklink" run
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target

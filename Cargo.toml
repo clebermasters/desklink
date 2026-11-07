@@ -1,0 +1,41 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+arboard = "3.6"
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+snow = { version = "0.10", default-features = false, features = ["default-resolver", "use-curve25519", "use-chacha20poly1305", "use-blake2", "use-getrandom"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "sync", "time", "signal"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+x11rb = { version = "0.13", features = ["xtest", "randr", "xfixes"] }
+zeroize = { version = "1", features = ["derive"] }
+desklink-protocol = { path = "crates/protocol" }
+desklink-transport = { path = "crates/transport" }
+desklink-core = { path = "crates/core" }
+desklink-platform = { path = "crates/platform" }
+desklink-clipboard = { path = "crates/clipboard" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
