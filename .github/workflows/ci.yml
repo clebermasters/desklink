@@ -9,7 +9,9 @@ jobs:
     strategy:
       matrix:
         # macOS UI acceptance is deferred until a native test Mac is available.
-        os: [ubuntu-latest]
+        # The Wayland tests run this job's binary inside a Debian trixie container (glibc 2.41),
+        # so build on a runner whose glibc is not newer: ubuntu-24.04 has 2.39, 26.04 has 2.43.
+        os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
