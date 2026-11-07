@@ -23,6 +23,44 @@ Desklink 0.2 adds a native screen-layout editor to the existing sharing engine. 
 - Switching controllers through the GUI also passes: the Wayland receiver accepts its selected controller's layout, receives EI keyboard input in a native GTK widget and returns control to the X11 controller at the shared edge.
 - Formatting and Clippy pass locally. Hosted CI remains unrun; a workflow definition is not evidence of hosted results.
 
+## Android receiver
+
+Delivered:
+- An Android 8+ app (`android/`) that embeds the unmodified agent through JNI (`crates/android`).
+- Accessibility input by default, and an opt-in ADB developer-mode helper. The helper runs as the shell user and authenticates the app with a token.
+- A pointer overlay, rotation-aware geometry and text/PNG clipboard.
+- Confirmed pairing links, a foreground service, and CLI/script pairing.
+
+Verified on an Android 15 (API 35) x86_64 emulator, using the debug APK and the minified release APK:
+- `tests/android_e2e.py --x11-agent` passes 18 checks:
+  - shell-only pairing
+  - accessibility click focus, capitalized typing and Ctrl+A/Ctrl+V
+  - wheel scrolling
+  - text clipboard in both directions
+  - ADB helper: shell user, authenticated connection, typing, wrong-token rejection
+  - a real `desklink run` on a private Xvfb display: hands its pointer across its right edge, types with captured X11 keys, and exchanges the X11 clipboard both ways
+- The pairing link always asks for confirmation.
+- Rotation reaches both connected and newly connected peers.
+- `cargo test -p desklink-android` runs the agent in-process against a headless controller.
+
+Verified on a physical Samsung Galaxy Z Fold7 (Android 17, cover screen 1080×2520) over home Wi-Fi, driven by a real `desklink run` on an X11 desktop:
+- shell pairing in both directions and connection over the LAN
+- edge handoff to the phone and back, with the accessibility backend
+- click focus, typing, Ctrl+A/Ctrl+C/Ctrl+V, wheel scrolling
+- Unicode text clipboard in both directions
+
+Not yet verified:
+- Fold/unfold geometry changes on a foldable.
+- Layout-editor mode: `LayoutUpdate` sync and `Traverse` through the phone.
+- PNG clipboard on Android.
+- Drag, long-press/right-click and the Back button.
+- ADB-mode hover and right click.
+- Android 8–12 legacy typing.
+- The notification's *Send clipboard* action.
+- Behavior while locked or with the screen off.
+- The shell provider's UID rejection, which is reviewed in code only: Android blocks the `content` tool for app UIDs before the call reaches the provider.
+- The hosted Android CI job has not run.
+
 ## Platform limits and follow-up
 
 - On Wayland, changed capture spans restart sharing and request fresh consent. GNOME 48 cannot retain working EIS capture references through the needed disable/update cycle. Layout edits with unchanged spans apply live. X11 applies position edits live.

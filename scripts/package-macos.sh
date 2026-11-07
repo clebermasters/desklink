@@ -2,8 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 test "$(uname -s)" = Darwin || { echo 'Build the macOS bundle on a Mac with Xcode command-line tools.' >&2; exit 1; }
-cargo build --release --locked --target aarch64-apple-darwin
-cargo build --release --locked --target x86_64-apple-darwin
+cargo build -p desklink --release --locked --target aarch64-apple-darwin
+cargo build -p desklink --release --locked --target x86_64-apple-darwin
 desklink_stage="$(mktemp -d)"
 trap 'rm -rf "$desklink_stage"' EXIT
 desklink_app="$desklink_stage/Desklink.app"

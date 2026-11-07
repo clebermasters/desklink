@@ -13,6 +13,9 @@ The workspace separates portable policy from I/O. Platform callbacks and clipboa
 | `desklink-settings` | Shared configuration, atomic saves, pairing codes and local control types | Rendering or capture |
 | `desklink-ui` | Native screen editor, pairing and sharing controls, status | Input injection or networking |
 | `desklink` | CLI, local agent control, connection supervision, action execution | Platform-specific input mechanics |
+| `desklink-android` | JNI library hosting the same runtime inside the Android app: action queue, Android `Desktop`, key map, phone profile | Performing input (done by the app's accessibility or ADB-helper backend) |
+
+The `desklink` package is a library plus the executable. `runtime::run_with_host` runs the agent with any `Desktop`, a polling interval, optional signal handling and a shutdown token. The desktop executable and the Android app embed that same runtime, so handoff, trust and clipboard rules stay identical. See [Android](android.md).
 
 ## Input lifecycle
 

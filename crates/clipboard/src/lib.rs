@@ -1,11 +1,14 @@
 //! Owns the OS clipboard on a dedicated thread. Never logs clipboard contents.
 #![forbid(unsafe_code)]
+// On Android the app owns the clipboard; only the shared types and PNG encoding are used there.
+#![cfg_attr(target_os = "android", allow(dead_code, unused_imports))]
 
 use anyhow::{Context, Result, ensure};
 use desklink_protocol::{ClipboardContent, ClipboardKind, MAX_CLIPBOARD, MAX_PIXELS, MAX_TEXT};
 use image::ImageEncoder;
+#[cfg(not(target_os = "android"))]
+use std::borrow::Cow;
 use std::{
-    borrow::Cow,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -33,6 +36,11 @@ struct Applied {
 }
 
 impl ClipboardService {
+    #[cfg(target_os = "android")]
+    pub fn start() -> Result<Self> {
+        anyhow::bail!("the Android app owns clipboard access")
+    }
+    #[cfg(not(target_os = "android"))]
     pub fn start() -> Result<Self> {
         let (tx, updates) = mpsc::channel(4);
         let (apply, mut rx) = watch::channel::<Option<Arc<Applied>>>(None);
@@ -134,6 +142,7 @@ impl Drop for ClipboardService {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn read_content(clipboard: &mut arboard::Clipboard) -> Option<ClipboardContent> {
     if let Ok(image) = clipboard.get_image()
         && let Ok(content) = encode_image(image.width, image.height, &image.bytes)
@@ -176,6 +185,7 @@ pub fn encode_image(width: usize, height: usize, rgba: &[u8]) -> Result<Clipboar
     })
 }
 
+#[cfg(not(target_os = "android"))]
 fn write_content(clipboard: &mut arboard::Clipboard, content: &ClipboardContent) -> Result<()> {
     ensure!(content.valid(), "invalid clipboard content");
     match content.kind {

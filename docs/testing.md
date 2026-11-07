@@ -57,3 +57,17 @@ docker run --rm --init --user 1000:1000 --network none \
 ```
 
 The test driver creates virtual input devices exclusively in its private compositor. `--approve-gnome` clicks the real GNOME 48 consent dialogs after they render; it does not replace portal responses or modify permission storage. That consent automation depends on the pinned test image's 1600×1000 layout. It is not part of Desklink or a method for bypassing user approval. The application and all desktop test processes run as UID 1000.
+
+## Android receiver
+
+`cargo test -p desklink-android` runs the queue, keymap, desktop and profile unit tests. It also runs an in-process agent against a headless controller over loopback.
+
+`tests/android_e2e.py --serial <device>` installs the debug APK on an emulator or test phone. It drives the app through `adb forward` with `crates/android/examples/controller.rs`, so this computer's input is never captured. It verifies:
+
+- shell-only pairing
+- accessibility click, typing and Ctrl+A/Ctrl+V
+- wheel scrolling
+- clipboard in both directions
+- the ADB helper: shell user, authenticated connection, typing, wrong-token rejection
+
+It changes accessibility settings and the app's pairing, so use a disposable device. `uiautomator dump` briefly unbinds accessibility services, so the script waits for the rebind before sending accessibility input.

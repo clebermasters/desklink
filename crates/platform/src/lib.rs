@@ -23,6 +23,7 @@ pub enum LocalEvent {
 }
 
 /// Establish modifiers before replaying held shortcuts or mouse buttons on a new screen.
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 fn order_held_inputs(held: &mut [Input]) {
     held.sort_by_key(|input| match input {
         Input::Key {
@@ -133,6 +134,7 @@ pub fn open_with_spans(spans: &[CaptureSpan], clipboard: bool) -> Result<Box<dyn
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
+        let _ = (spans, clipboard);
         anyhow::bail!("only Linux and macOS are supported")
     }
 }
@@ -142,7 +144,17 @@ pub fn capabilities() -> Capabilities {
     {
         macos::capabilities()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Capabilities {
+            backend: "embedded",
+            capture: false,
+            inject: false,
+            geometry: None,
+            detail: "this platform supplies its desktop through an embedding host".into(),
+        }
+    }
+    #[cfg(target_os = "linux")]
     {
         if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
             return wayland::capabilities();

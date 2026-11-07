@@ -25,10 +25,48 @@ struct Connected {
     clipboard: bool,
 }
 
-pub async fn run(mut config: Config, identity: Identity, profile: PathBuf) -> Result<()> {
+/// How an embedding process hosts the sharing agent.
+pub struct Host {
+    pub desktop: Box<dyn Desktop>,
+    /// Desktop polling interval. Receivers without local capture can poll less often to save power.
+    pub tick: Duration,
+    /// Stop when SIGINT/SIGTERM arrive. Embedded hosts stop through `shutdown` or the control socket.
+    pub handle_signals: bool,
+    /// Cancelling this token stops the agent and releases all injected input.
+    pub shutdown: CancellationToken,
+}
+
+pub async fn run(config: Config, identity: Identity, profile: PathBuf) -> Result<()> {
     config.validate_for(identity.public)?;
     let spans = capture_spans(&config, identity.public);
-    let mut desktop = desklink_platform::open_with_spans(&spans, config.clipboard)?;
+    let desktop = desklink_platform::open_with_spans(&spans, config.clipboard)?;
+    run_with_host(
+        config,
+        identity,
+        profile,
+        Host {
+            desktop,
+            tick: Duration::from_millis(4),
+            handle_signals: true,
+            shutdown: CancellationToken::new(),
+        },
+    )
+    .await
+}
+
+pub async fn run_with_host(
+    mut config: Config,
+    identity: Identity,
+    profile: PathBuf,
+    host: Host,
+) -> Result<()> {
+    config.validate_for(identity.public)?;
+    let Host {
+        mut desktop,
+        tick: tick_interval,
+        handle_signals,
+        shutdown,
+    } = host;
     let geometry = desktop.geometry()?;
     let mut clipboard = if config.clipboard && !desktop.owns_clipboard() {
         Some(ClipboardService::start().context("clipboard unavailable; configure clipboard=false or use --no-clipboard to run without it")?)
@@ -69,13 +107,13 @@ pub async fn run(mut config: Config, identity: Identity, profile: PathBuf) -> Re
     let mut peers: HashMap<PeerKey, Connected> = HashMap::new();
     let active = Arc::new(Mutex::new(HashSet::new()));
     let (tx, mut events) = mpsc::channel(512);
-    let shutdown = CancellationToken::new();
-    let hello = Message::Hello {
+    // Connections made after a display change must advertise the current geometry.
+    let (hello_tx, hello) = tokio::sync::watch::channel(Message::Hello {
         version: VERSION,
         name: config.name.clone(),
         geometry,
         clipboard: config.clipboard,
-    };
+    });
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("cannot listen on {}", config.listen))?;
@@ -101,7 +139,7 @@ pub async fn run(mut config: Config, identity: Identity, profile: PathBuf) -> Re
                     let (id, trust, hello, tx, cancel) = (
                         listen_id.clone(),
                         listen_trusted.clone(),
-                        listen_hello.clone(),
+                        current_hello(&listen_hello),
                         listen_tx.clone(),
                         listen_cancel.clone(),
                     );
@@ -142,7 +180,7 @@ pub async fn run(mut config: Config, identity: Identity, profile: PathBuf) -> Re
                     let connected=active.lock().is_ok_and(|p|p.contains(&key));
                     if !connected {
                         match timeout(Duration::from_secs(4),TcpStream::connect(&address)).await {
-                            Ok(Ok(socket))=>if let Err(error)=desklink_transport::session(socket,true,id.clone(),trust.clone(),hello.clone(),tx.clone(),cancel.clone()).await {tracing::debug!(%error,%address,"outgoing session ended");},
+                            Ok(Ok(socket))=>if let Err(error)=desklink_transport::session(socket,true,id.clone(),trust.clone(),current_hello(&hello),tx.clone(),cancel.clone()).await {tracing::debug!(%error,%address,"outgoing session ended");},
                             Ok(Err(error))=>tracing::debug!(%error,%address,"peer unavailable"),
                             Err(_)=>tracing::debug!(%address,"connection timed out"),
                         }
@@ -155,16 +193,22 @@ pub async fn run(mut config: Config, identity: Identity, profile: PathBuf) -> Re
         }
     }
     tracing::info!(name=%config.name,listen=%config.listen,clipboard=config.clipboard,"sharing started; Ctrl+Alt+Shift+Escape restores local control");
-    let mut tick = tokio::time::interval(Duration::from_millis(4));
+    let mut tick = tokio::time::interval(tick_interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut geometry_tick = tokio::time::interval(Duration::from_secs(2));
     let mut last_geometry = geometry;
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut term = if handle_signals {
+        Some(tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::terminate(),
+        )?)
+    } else {
+        None
+    };
     let result:Result<()>=async {
         loop {
             let effects=tokio::select! {
-                _=tokio::signal::ctrl_c()=>break,
-                _=term.recv()=>break,
+                _=interrupted(handle_signals)=>break,
+                _=terminated(&mut term)=>break,
                 _=shutdown.cancelled()=>break,
                 request=control.incoming.recv()=>{
                     let Some(envelope)=request else{break;};
@@ -226,6 +270,11 @@ pub async fn run(mut config: Config, identity: Identity, profile: PathBuf) -> Re
                     let g = desktop.geometry()?;
                     if g != last_geometry {
                         last_geometry = g;
+                        hello_tx.send_modify(|hello| {
+                            if let Message::Hello { geometry, .. } = hello {
+                                *geometry = g;
+                            }
+                        });
                         engine.geometry_changed(g)
                     } else {
                         Vec::new()
@@ -417,6 +466,26 @@ fn publish_layout(config: &Config, peers: &HashMap<PeerKey, Connected>, own: Pee
                 let _ = peer.handle.send(Message::LayoutUpdate(layout.clone()));
             }
         }
+    }
+}
+
+/// Clones the latest Hello without holding the watch lock across an await.
+fn current_hello(hello: &tokio::sync::watch::Receiver<Message>) -> Message {
+    hello.borrow().clone()
+}
+
+async fn interrupted(enabled: bool) {
+    if !enabled || tokio::signal::ctrl_c().await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+async fn terminated(signal: &mut Option<tokio::signal::unix::Signal>) {
+    match signal {
+        Some(signal) => {
+            signal.recv().await;
+        }
+        None => std::future::pending().await,
     }
 }
 

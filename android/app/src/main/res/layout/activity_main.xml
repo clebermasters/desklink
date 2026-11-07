@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The frame applies the system-bar insets (Android 15 draws apps edge to edge). -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true">
+
+<ScrollView
+    android:id="@+id/scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:id="@+id/content"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingTop="20dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="@color/text"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+
+        <TextView
+            style="@style/Body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:text="Use a paired computer's mouse and keyboard on this phone." />
+
+        <!-- Sharing -->
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <TextView style="@style/CardTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Sharing" />
+            <TextView android:id="@+id/status" style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Off" />
+            <Button android:id="@+id/toggle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Start sharing" />
+        </LinearLayout>
+
+        <!-- Try it -->
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <TextView style="@style/CardTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Try it" />
+            <EditText android:id="@+id/test_input" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Click here with the computer's mouse and type" android:importantForAutofill="no" android:inputType="textMultiLine" android:minLines="2" />
+        </LinearLayout>
+        <!-- Input control -->
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <TextView style="@style/CardTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="How the computer controls this phone" />
+            <RadioGroup android:id="@+id/mode" android:layout_width="match_parent" android:layout_height="wrap_content">
+                <RadioButton android:id="@+id/mode_accessibility" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Accessibility (recommended)" />
+                <TextView style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="32dp" android:text="Taps, drags, long presses, scrolling and typing. No developer settings needed." />
+                <RadioButton android:id="@+id/mode_shell" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="ADB developer mode" />
+                <TextView style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="32dp" android:text="A real mouse with hover, right click and the wheel, plus keyboard shortcuts in every app. Needs USB or wireless debugging and a helper started from the computer after each phone restart." />
+            </RadioGroup>
+            <TextView android:id="@+id/accessibility_state" style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" />
+            <Button android:id="@+id/open_accessibility" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Open accessibility settings" />
+            <LinearLayout android:id="@+id/shell_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+                <TextView android:id="@+id/shell_state" style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" />
+                <TextView android:id="@+id/shell_command" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:background="@drawable/card" android:fontFamily="monospace" android:padding="10dp" android:textColor="@color/text" android:textIsSelectable="true" android:textSize="12sp" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                    <Button android:id="@+id/copy_command" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Copy command" />
+                    <Button android:id="@+id/stop_helper" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Stop helper" />
+                </LinearLayout>
+                <Button android:id="@+id/overlay_permission" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Allow drawing the pointer" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Pairing -->
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <TextView style="@style/CardTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Computers" />
+            <LinearLayout android:id="@+id/peers" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
+            <TextView style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="Paste the computer's pairing code (desklink://pair/…). On the computer, open Desklink → Add computer, or run desklink pairing-code." />
+            <EditText android:id="@+id/pair_code" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="desklink://pair/…" android:importantForAutofill="no" android:inputType="textUri" android:maxLines="3" />
+            <CheckBox android:id="@+id/pair_controller" android:layout_width="match_parent" android:layout_height="wrap_content" android:checked="true" android:text="Let this computer arrange the screens" />
+            <Button android:id="@+id/pair" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Pair" />
+        </LinearLayout>
+
+        <!-- This phone -->
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <TextView style="@style/CardTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="This phone" />
+            <EditText android:id="@+id/name" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Phone name" android:importantForAutofill="no" android:inputType="textCapWords" android:maxLength="64" android:singleLine="true" />
+            <TextView android:id="@+id/own_address" style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" />
+            <TextView style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="Give this code to the computer so it trusts the phone too:" />
+            <TextView android:id="@+id/own_code" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:background="@drawable/card" android:fontFamily="monospace" android:padding="10dp" android:textColor="@color/text" android:textIsSelectable="true" android:textSize="11sp" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <Button android:id="@+id/copy_code" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Copy" />
+                <Button android:id="@+id/share_code" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Share" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Options -->
+        <LinearLayout style="@style/Card" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <TextView style="@style/CardTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Options" />
+            <Switch android:id="@+id/clipboard" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Share text and image clipboard" />
+            <TextView style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Copies from a computer arrive automatically. Android only lets Desklink read the phone's clipboard while it is open, so use Send clipboard (here or in the notification) after copying on the phone." />
+            <Button android:id="@+id/send_clipboard" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Send clipboard now" />
+            <TextView style="@style/Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Pointer speed" />
+            <RadioGroup android:id="@+id/speed" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <RadioButton android:id="@+id/speed_slow" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Precise" />
+                <RadioButton android:id="@+id/speed_normal" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Normal" />
+                <RadioButton android:id="@+id/speed_fast" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Fast" />
+            </RadioGroup>
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>
+</FrameLayout>

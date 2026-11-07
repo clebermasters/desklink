@@ -2,6 +2,11 @@
 
 ## 0.2.0 — in development
 
+- Android receiver app: the unmodified agent runs through JNI. Input goes through an accessibility service (default) or an opt-in ADB helper that runs as the shell user, authenticated with a token. Includes a pointer overlay, rotation-aware geometry, text/PNG clipboard both ways, pairing links and a foreground service.
+- `desklink pairing-code` and `desklink pair CODE [--edge]` CLI commands; `scripts/android-pair.sh` and `scripts/android-input-helper.sh`.
+- The runtime can be embedded (`runtime::run_with_host`) with a custom desktop, tick interval and shutdown token.
+- Settings and profile locks use flock(2) on Android, where std file locking is unsupported.
+- Connections made after a display change (rotation, monitor change) advertise the current geometry instead of the startup size.
 - Native screen-layout UI with shared fonts and controls for Linux and future macOS validation.
 - Drag, resize, snap, validate and save computer arrangements; explicit controller selection and public pairing codes.
 - Live layout synchronization and three-computer routing with held-input transfer and disconnected-target recovery.

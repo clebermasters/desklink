@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Desklink</string>
+    <string name="accessibility_label">Desklink pointer and keyboard</string>
+    <string name="accessibility_description">Lets a paired computer\'s mouse and keyboard control this phone while Desklink sharing is on. Desklink performs taps, swipes and key presses for that computer. It does not read or store screen content.</string>
+    <string name="channel_name">Sharing</string>
+    <string name="channel_description">Shows while a computer can control this phone.</string>
+</resources>

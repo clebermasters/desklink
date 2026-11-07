@@ -267,8 +267,36 @@ fn settings_lock(path: &Path) -> Result<fs::File> {
         options.mode(0o600);
     }
     let file = options.open(path.with_file_name("settings.lock"))?;
-    file.lock()?;
+    lock_file(&file, true)?;
     Ok(file)
+}
+
+/// Exclusive advisory lock. Android's std does not implement `File::lock`, so use flock(2) there.
+fn lock_file(file: &fs::File, wait: bool) -> Result<()> {
+    #[cfg(target_os = "android")]
+    {
+        use std::os::fd::AsRawFd;
+        let operation = libc::LOCK_EX | if wait { 0 } else { libc::LOCK_NB };
+        loop {
+            // SAFETY: the descriptor belongs to `file`, which outlives this call.
+            if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error.into());
+            }
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        if wait {
+            file.lock()?;
+        } else {
+            file.try_lock()?;
+        }
+        Ok(())
+    }
 }
 
 pub fn default_path() -> Result<PathBuf> {
@@ -294,7 +322,7 @@ pub fn lock_profile(config: &Path) -> Result<fs::File> {
         options.mode(0o600);
     }
     let file = options.open(path)?;
-    file.try_lock()
+    lock_file(&file, false)
         .context("this profile is already running, or its lock is unavailable")?;
     Ok(file)
 }

@@ -1,9 +1,7 @@
-mod config;
-mod local_control;
-mod runtime;
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use config::{Config, Peer};
+use desklink::{config, runtime};
 use desklink_protocol::Edge;
 use desklink_transport::{Identity, parse_public};
 use std::{net::SocketAddr, path::PathBuf};
@@ -53,6 +51,18 @@ enum Command {
     },
     /// Remove a paired computer (restart a running instance to apply changes).
     Untrust { public_key: String },
+    /// Print this computer's pairing code (desklink://pair/...) for another computer or a phone.
+    PairingCode {
+        /// Address others use to reach this computer, e.g. 192.168.1.10:24880. Guessed if omitted.
+        #[arg(long)]
+        address: Option<String>,
+    },
+    /// Trust the computer or phone in a pairing code, optionally placing it at a screen edge.
+    Pair {
+        code: String,
+        #[arg(long)]
+        edge: Option<Edge>,
+    },
     /// Check desktop capabilities and show the configuration location without capturing input.
     Doctor,
     /// Show/request the operating system's input permissions.
@@ -196,6 +206,42 @@ async fn execute() -> Result<()> {
             });
             config.save(&path)?;
             println!("Paired {name}. Restart `desklink run` to apply configuration changes.");
+        }
+        Command::PairingCode { address } => {
+            let identity = Identity::load(&config::identity_path(&path))?;
+            let config = Config::load(&path)?;
+            let code = desklink_settings::pairing::PairingCode {
+                version: 1,
+                name: config.name,
+                public_key: hex::encode(identity.public),
+                address: address.unwrap_or_else(|| {
+                    desklink_settings::pairing::advertised_address(config.listen)
+                }),
+            };
+            println!("{}", code.encode()?);
+        }
+        Command::Pair { code, edge } => {
+            let code = desklink_settings::pairing::PairingCode::decode(&code)?;
+            let key = parse_public(&code.public_key)?;
+            let identity = Identity::load(&config::identity_path(&path))?;
+            ensure!(
+                key != identity.public,
+                "this is this computer's own pairing code"
+            );
+            let mut config = Config::load(&path)?;
+            config
+                .peers
+                .retain(|p| parse_public(&p.public_key).ok() != Some(key));
+            config.peers.push(Peer {
+                public_key: hex::encode(key),
+                edge,
+                ..code.peer()
+            });
+            config.save(&path)?;
+            println!(
+                "Paired {}. Restart `desklink run` to apply configuration changes.",
+                code.name
+            );
         }
         Command::Untrust { public_key } => {
             let key = parse_public(&public_key)?;

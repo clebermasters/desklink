@@ -7,8 +7,11 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-arboard.workspace = true
 desklink-protocol.workspace = true
 image.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+# Android supplies clipboard access through its app process instead of arboard.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard.workspace = true
