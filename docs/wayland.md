@@ -2,7 +2,7 @@
 
 Desklink uses the desktop's InputCapture portal to receive physical input and its RemoteDesktop portal to inject input through EI. It uses the Clipboard portal for text and PNG sharing. It does not access raw input devices or install a privileged helper.
 
-Both InputCapture and RemoteDesktop interfaces are currently required by the backend, even for a computer used primarily as a receiver. `desklink doctor` probes input interface availability without starting capture. Running the application creates portal sessions and may present multiple approval dialogs.
+InputCapture is required. When RemoteDesktop is absent (for example on Hyprland), explicitly disable clipboard sharing with `clipboard=false` in the configuration or `desklink run --no-clipboard` to send keyboard and mouse input to another computer. This mode cannot receive input; incoming handoffs are rejected. Returning restores the local pointer near the edge where capture began. RemoteDesktop remains required for receiving input and portal clipboard sharing. Denied or failed emulation sessions never fall back to sending only. `desklink doctor` probes input interface availability without starting capture. Running the application creates portal sessions and may present multiple approval dialogs.
 
 Clipboard sharing requires a backend that implements the Clipboard portal and grants clipboard access to the RemoteDesktop session. If that interface is unavailable, the application reports an error; `--no-clipboard` is an explicit input-only alternative. It does not silently claim that unsupported clipboard sharing works.
 

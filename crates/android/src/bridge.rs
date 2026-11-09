@@ -159,9 +159,7 @@ fn supersedes(next: &Action, last: &Action) -> bool {
     match (next, last) {
         (Action::Move { .. }, Action::Move { .. }) => true,
         // Consecutive absolute positions; wheel and button reports in between keep their order.
-        (Action::Report(next), Action::Report(last)) => {
-            next.position_only && last.position_only && next.id == last.id
-        }
+        (Action::Report(next), Action::Report(last)) => next.supersedes(last),
         _ => false,
     }
 }

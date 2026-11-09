@@ -33,7 +33,7 @@ class SharingService : Service() {
     private lateinit var keyboard: KeyboardSharing
     private var pump: Thread? = null
     private var stopper: Thread? = null
-    private var wifiLock: WifiManager.WifiLock? = null
+    private val wifiLocks = mutableListOf<WifiManager.WifiLock>()
     @Volatile private var stopping = false
     private var statusText = "Starting…"
 
@@ -166,8 +166,8 @@ class SharingService : Service() {
         runCatching { getSystemService(DisplayManager::class.java).unregisterDisplayListener(displayListener) }
         router.perform(Action.Hide)
         ClipboardSync.unwatch(this)
-        wifiLock?.takeIf { it.isHeld }?.release()
-        wifiLock = null
+        wifiLocks.filter { it.isHeld }.forEach { it.release() }
+        wifiLocks.clear()
         val previous = pump
         pump = null
         stopper = thread(name = "desklink-stop") {
@@ -199,16 +199,20 @@ class SharingService : Service() {
 
     private fun acquireWifiLock() {
         val wifi = applicationContext.getSystemService(WifiManager::class.java) ?: return
+        // Wi-Fi power saving otherwise delivers input in bursts 100 ms or more apart. The
+        // low-latency lock only works while the app is in the foreground with the screen on;
+        // the high-performance lock covers the usual case of a phone lying on the desk, dark.
         @Suppress("DEPRECATION")
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-        } else {
-            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        val modes = buildList {
+            add(WifiManager.WIFI_MODE_FULL_HIGH_PERF)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) add(WifiManager.WIFI_MODE_FULL_LOW_LATENCY)
         }
-        // Wi-Fi power saving otherwise adds 100 ms or more to pointer latency on many phones.
-        wifiLock = wifi.createWifiLock(mode, "Desklink").apply {
-            setReferenceCounted(false)
-            acquire()
+        if (wifiLocks.isNotEmpty()) return
+        for (mode in modes) {
+            wifiLocks += wifi.createWifiLock(mode, "Desklink:$mode").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
         }
     }
 

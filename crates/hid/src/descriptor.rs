@@ -10,7 +10,12 @@ pub const POINTER_ABSOLUTE: u8 = 2;
 /// 7 bytes: buttons, X and Y (i16, relative), wheel, horizontal pan.
 pub const POINTER_RELATIVE: u8 = 3;
 
+/// 5 bytes: tip, barrel and in-range bits, X and Y (0..=32767, absolute). macOS supports
+/// absolute pens with a pressed tip, unlike absolute mice, so left-button drags stay exact.
+pub const PEN: u8 = 4;
+
 pub const KEYBOARD_LEN: usize = 8;
+pub const PEN_LEN: usize = 5;
 pub const ABSOLUTE_LEN: usize = 6;
 pub const RELATIVE_LEN: usize = 7;
 /// Largest absolute coordinate; positions are scaled from the screen size onto 0..=ABS_MAX.
@@ -121,6 +126,34 @@ pub const DESCRIPTOR: &[u8] = &[
     0x81, 0x06,       //     Input (Data, Variable, Relative)
     0xc0,             //   End Collection
     0xc0,             // End Collection
+
+    // Pen: exact positions with a pressed tip, for left-button drags.
+    0x05, 0x0d,       // Usage Page (Digitizer)
+    0x09, 0x02,       // Usage (Pen)
+    0xa1, 0x01,       // Collection (Application)
+    0x85, PEN,        //   Report ID
+    0x09, 0x20,       //   Usage (Stylus)
+    0xa1, 0x00,       //   Collection (Physical)
+    0x09, 0x42,       //     Usage (Tip Switch)
+    0x09, 0x44,       //     Usage (Barrel Switch)
+    0x09, 0x32,       //     Usage (In Range)
+    0x15, 0x00,       //     Logical Minimum (0)
+    0x25, 0x01,       //     Logical Maximum (1)
+    0x75, 0x01,       //     Report Size (1)
+    0x95, 0x03,       //     Report Count (3)
+    0x81, 0x02,       //     Input (Data, Variable, Absolute)
+    0x95, 0x05,       //     Report Count (5)
+    0x81, 0x03,       //     Input (Constant): padding
+    0x05, 0x01,       //     Usage Page (Generic Desktop)
+    0x09, 0x30,       //     Usage (X)
+    0x09, 0x31,       //     Usage (Y)
+    0x15, 0x00,       //     Logical Minimum (0)
+    0x26, 0xff, 0x7f, //     Logical Maximum (32767)
+    0x75, 0x10,       //     Report Size (16)
+    0x95, 0x02,       //     Report Count (2)
+    0x81, 0x02,       //     Input (Data, Variable, Absolute)
+    0xc0,             //   End Collection
+    0xc0,             // End Collection
 ];
 
 #[cfg(test)]
@@ -166,6 +199,7 @@ mod tests {
         assert_eq!(input_bits(KEYBOARD), KEYBOARD_LEN * 8);
         assert_eq!(input_bits(POINTER_ABSOLUTE), ABSOLUTE_LEN * 8);
         assert_eq!(input_bits(POINTER_RELATIVE), RELATIVE_LEN * 8);
+        assert_eq!(input_bits(PEN), PEN_LEN * 8);
     }
 
     #[test]
@@ -180,6 +214,6 @@ mod tests {
             assert!(depth >= 0);
         }
         assert_eq!(depth, 0);
-        assert_eq!(items().iter().filter(|(t, _)| *t == 0xa0).count(), 5);
+        assert_eq!(items().iter().filter(|(t, _)| *t == 0xa0).count(), 7);
     }
 }

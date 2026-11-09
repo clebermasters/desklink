@@ -62,7 +62,7 @@ The test driver creates virtual input devices exclusively in its private composi
 
 `cargo test -p desklink-android` runs the queue, keymap, desktop and profile unit tests. It also runs an in-process agent against a headless controller over loopback, and the same for the Bluetooth keyboard-and-mouse agent (`tests/keyboard_e2e.rs`): entry position, clicks, Control+C as Command+C, and release of held keys on return. `cargo test -p desklink-hid` checks the report descriptor against the report builders.
 
-The Bluetooth path itself needs real hardware: a phone and a computer that pairs it. The app's adb-only provider has `hid-start`, `hid-status` and `hid-send` hooks for driving the keyboard and mouse directly while testing.
+The Bluetooth path itself needs real hardware: a phone and a computer that pairs it. The app's adb-only provider has `hid-start`, `hid-status` and `hid-send` hooks for driving the keyboard and mouse directly while testing. On Linux, `cargo run -p desklink-bluez --example hid -- HOST_FILE [pair]` does the same without the rest of Desklink: each stdin line is `id:hex` reports (sent 8 ms apart, or `gap MS ...`), `wait MS` or `status`.
 
 `tests/android_e2e.py --serial <device>` installs the debug APK on an emulator or test phone. It drives the app through `adb forward` with `crates/android/examples/controller.rs`, so this computer's input is never captured. It verifies:
 
@@ -73,3 +73,7 @@ The Bluetooth path itself needs real hardware: a phone and a computer that pairs
 - the ADB helper: shell user, authenticated connection, typing, wrong-token rejection
 
 It changes accessibility settings and the app's pairing, so use a disposable device. `uiautomator dump` briefly unbinds accessibility services, so the script waits for the rebind before sending accessibility input.
+
+### Native Linux system tray
+
+After `cargo build --release -p desklink`, run `python3 tests/ui_tray_e2e.py` in a Hyprland session with a StatusNotifier tray host and Xwayland. It opens only a disposable editor, verifies tray registration, close-to-tray, restoring the same window, the menu actions, and quitting while hidden. It does not capture input or modify the user's Desklink profile. macOS menu bar support is compile-checked for Apple Silicon and Intel; native macOS hide/restore/menu acceptance still needs a test Mac.

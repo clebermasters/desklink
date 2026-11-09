@@ -94,6 +94,9 @@ pub struct Capabilities {
 
 /// Owned by the main desktop thread; platform callbacks never perform network I/O.
 pub trait Desktop {
+    fn can_inject(&self) -> bool {
+        true
+    }
     fn can_update_capture_spans(&self) -> bool {
         true
     }

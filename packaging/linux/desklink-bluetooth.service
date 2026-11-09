@@ -1,0 +1,16 @@
+[Unit]
+Description=Desklink Bluetooth keyboard and mouse for a computer without Desklink
+Documentation=https://github.com/clebermasters/desklink/blob/main/docs/bluetooth-linux.md
+PartOf=graphical-session.target
+After=graphical-session.target bluetooth.target
+Wants=desklink.service
+
+[Service]
+ExecStart="%h/.local/bin/desklink" bluetooth run
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target

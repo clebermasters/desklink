@@ -127,12 +127,25 @@ async fn controller_drives_a_bluetooth_computer_through_the_phone() {
             (16_300..16_450).contains(&x) && (16_300..16_450).contains(&y)
         }
     });
+    // A left click is the pen touching down and lifting at the pointer, so drags stay exact.
     pc.click(1).await.unwrap();
-    wait_for(&reports, "left button down", |r| {
-        r.id == descriptor::POINTER_RELATIVE && r.data == [1, 0, 0, 0, 0, 0, 0]
+    let press = wait_for(&reports, "left button down (pen tip)", |r| {
+        r.id == descriptor::PEN && r.data[0] == 0b101
     });
-    wait_for(&reports, "left button up", |r| {
-        r.id == descriptor::POINTER_RELATIVE && r.data == [0, 0, 0, 0, 0, 0, 0]
+    let (x, y) = (
+        u16::from_le_bytes([press.data[1], press.data[2]]),
+        u16::from_le_bytes([press.data[3], press.data[4]]),
+    );
+    assert!(
+        (16_300..16_450).contains(&x) && (16_300..16_450).contains(&y),
+        "{x},{y}"
+    );
+    wait_for(&reports, "left button up (pen out of range)", |r| {
+        r.id == descriptor::PEN && r.data[0] == 0
+    });
+    pc.click(3).await.unwrap();
+    wait_for(&reports, "right button down", |r| {
+        r.id == descriptor::POINTER_RELATIVE && r.data == [0b10, 0, 0, 0, 0, 0, 0]
     });
 
     // Control+C from Linux arrives as Command+C on the Mac.

@@ -159,6 +159,7 @@ class HidKeyboardMouse private constructor(private val context: Context) {
             val size = when (id.toInt()) {
                 KEYBOARD -> 8
                 POINTER_ABSOLUTE -> 6
+                PEN -> 5
                 else -> 7
             }
             proxy?.replyReport(device, type, id, ByteArray(size))
@@ -201,6 +202,7 @@ class HidKeyboardMouse private constructor(private val context: Context) {
         private const val TAG = "Desklink"
         const val KEYBOARD = 1
         const val POINTER_ABSOLUTE = 2
+        const val PEN = 4
 
         @Volatile private var instance: HidKeyboardMouse? = null
 

@@ -352,6 +352,10 @@ pub async fn run_with_host(
                             if peers.get(&key).is_none_or(|p| p.handle.id != id) {
                                 continue;
                             }
+                            if !desktop.can_inject() && let Message::Enter { session, .. } = &message {
+                                peers[&key].handle.send(Message::Release(*session))?;
+                                continue;
+                            }
                             if matches!(message,Message::LayoutRequest) {
                                 if let Some(layout)=&config.layout&&layout.owner==hex::encode(identity.public)&&layout.screen(&hex::encode(key)).is_some(){peers[&key].handle.send(Message::LayoutUpdate(layout.clone()))?;}
                                 continue;

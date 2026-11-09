@@ -28,6 +28,19 @@ use tokio_util::sync::CancellationToken;
 pub const TICK: Duration = Duration::from_millis(20);
 const STOP_DEADLINE: Duration = Duration::from_secs(3);
 
+/// Input forwarding is latency-bound, not CPU-bound: a raised priority keeps the scheduler from
+/// parking the agent on a slow core behind background work while the screen is off.
+fn raise_priority() {
+    #[cfg(target_os = "android")]
+    // SAFETY: setpriority only reads its integer arguments; tid 0 means the calling thread.
+    unsafe {
+        // Android's THREAD_PRIORITY_URGENT_DISPLAY, which apps may set on their own threads.
+        if libc::setpriority(libc::PRIO_PROCESS, 0, -8) != 0 {
+            tracing::debug!("could not raise the agent's thread priority");
+        }
+    }
+}
+
 struct Running {
     thread: JoinHandle<()>,
     shutdown: CancellationToken,
@@ -111,6 +124,7 @@ impl Agent {
         let thread = thread::Builder::new()
             .name("desklink-agent".into())
             .spawn(move || {
+                raise_priority();
                 let result = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()

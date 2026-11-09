@@ -38,6 +38,7 @@ desklink-layout = { path = "crates/layout" }
 desklink-settings = { path = "crates/settings" }
 desklink-ui = { path = "crates/ui" }
 desklink-hid = { path = "crates/hid" }
+desklink-bluez = { path = "crates/bluez" }
 
 [profile.release]
 lto = "thin"

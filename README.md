@@ -25,7 +25,7 @@ You have a laptop, a desktop and a phone, all within arm's reach. You also have 
 - **📱 Use your phone with your real mouse and keyboard.** Click to tap, type into any text field, scroll with the wheel, and paste from your computer straight into a chat on the phone.
 - **📋 A clipboard that travels.** Copy text or a **PNG image with transparency** on one machine and paste it on another. It works in every direction, whichever device holds the keyboard.
 - **🗺️ Arrange your desk visually.** A native layout editor lets you drag, resize and snap screen cards to match your physical setup. Left, right, top, bottom, partial overlaps, different resolutions, and rows of three or more computers are all supported.
-- **🔵 Even computers without Desklink.** Your phone can stand in as a Bluetooth keyboard and mouse for a computer where you can't install anything.
+- **🔵 Even computers without Desklink.** Your Linux computer, or your phone, can stand in as a Bluetooth keyboard and mouse for a computer where you can't install anything.
 - **🔐 Private by design.** Devices talk directly over your LAN with **Noise XX** encryption and **explicit pairing on both sides**. Nothing accepts a connection on first use without your approval, and nothing passes through a server.
 - **🪶 Small and native.** One Rust executable per platform. No Electron, no Qt, no kernel driver and no privileged background service.
 - **🛟 Always a way back.** **Ctrl+Alt+Shift+Escape** returns control to the local machine instantly, and held keys are released if a peer disappears.
@@ -87,6 +87,8 @@ desklink run
 
 ---
 
+On Linux desktops with a system tray and on macOS, closing or minimizing the editor keeps Desklink in the tray/menu bar. Use **Open Desklink** to restore it, **Start/Stop sharing** to control sharing, or **Quit Desklink** to stop sharing and exit. Unsaved layout edits stay in memory while hidden; quitting offers save/discard/cancel. On Wayland desktops with a tray and Xwayland, only the editor uses Xwayland to support hiding/restoring; input capture still uses Wayland portals. If no Linux tray host or compatible window backend is available, the window keeps its normal close behavior.
+
 ## 📱 Bring your phone
 
 Your Android phone becomes one more screen in the row. Move the pointer off the edge and it appears on the phone.
@@ -115,6 +117,8 @@ Two input modes, your choice:
 - **ADB developer mode (opt-in).** A real mouse with hover, right-click and wheel events, plus keyboard shortcuts in every app. It uses a small helper that runs as the ordinary adb shell user, never root.
 
 **No Desklink on that computer? 🔵 Use Bluetooth.** For a computer you can't install software on, such as a locked-down work laptop, the phone becomes a **standard Bluetooth keyboard and mouse**. Pair it in that computer's Bluetooth settings (no admin rights needed), and your Desklink computer drives it through the phone: `Linux → Wi-Fi → phone → Bluetooth → Mac`. Pick the approach per computer in the app: *It runs Desklink* or *No Desklink*. See [Bluetooth keyboard and mouse](docs/android.md#computers-without-desklink-bluetooth-keyboard-and-mouse).
+
+**Linux next to that computer? Skip the phone.** `desklink bluetooth setup --name "Work MacBook" --size 1512x982 --edge left` and `desklink bluetooth pair` make the Linux computer itself the Mac's Bluetooth keyboard and mouse: `Linux → Bluetooth → Mac`, smoother and with one hop less. It needs one admin step on Linux and none on the Mac. See [Linux as a Bluetooth keyboard and mouse](docs/bluetooth-linux.md).
 
 ✅ **Tested on real hardware:** a Samsung Galaxy Z Fold7 (Android 17) over home Wi-Fi, covering edge handoff, typing, shortcuts, scrolling and clipboard both ways. It's also covered by an 18-check emulator suite. Full guide: **[docs/android.md](docs/android.md)**.
 
@@ -156,12 +160,14 @@ Found something? See [SECURITY.md](SECURITY.md).
 
 ## 🧭 Platform status
 
+**Tested environments: macOS (Mac), Pop!_OS, and Omarchy.** Coverage varies by feature: the Mac has been verified as a Bluetooth keyboard/mouse host, and Omarchy's Hyprland capture-only sharing and Linux tray hide/restore/quit have been exercised live. The native macOS app and new menu bar feature pass Apple Silicon and Intel compile checks; native macOS app acceptance testing is still pending.
+
 | Platform | What's there | How it's verified |
 | --- | --- | --- |
 | 🐧 **Linux X11** | Native UI, X11/XTEST input and clipboard | Real UI gestures, plus two- and three-desktop Xvfb suites |
-| 🐧 **Linux Wayland** | Native UI, InputCapture/RemoteDesktop/Clipboard portals and EI | GNOME 48 test environment; see [status](docs/STATUS.md) |
+| 🐧 **Linux Wayland** | InputCapture/RemoteDesktop/Clipboard portals and EI; capture-only mode with clipboard off when RemoteDesktop is absent | GNOME 48 test environment; live Omarchy/Hyprland Bluetooth sharing and tray checks; see [status](docs/STATUS.md) |
 | 📱 **Android 8+** (receiver) | Same engine via JNI; accessibility input or opt-in ADB helper; clipboard | Galaxy Z Fold7 (Android 17) over Wi-Fi; Android 15 emulator end-to-end in both input modes |
-| 🍎 **macOS** | Shared UI and layout code, Quartz input, native pasteboard | Preview: earlier compile checks only, not yet tested on a Mac |
+| 🍎 **macOS** | Shared UI and layout code, Quartz input, native pasteboard, menu bar icon; Bluetooth host mode needs no Mac app | Bluetooth host mode tested on a Mac; native app/menu bar compile-checked for Apple Silicon and Intel, native acceptance pending |
 
 On macOS the operating system must approve input access. Wayland needs the desktop's input portals and your approval. Login screens and FileVault preboot are outside the supported scope.
 

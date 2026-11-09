@@ -6,6 +6,9 @@ use desklink_protocol::Edge;
 use desklink_transport::{Identity, parse_public};
 use std::{net::SocketAddr, path::PathBuf};
 
+#[cfg(target_os = "linux")]
+mod bluetooth;
+
 #[derive(Parser)]
 #[command(
     version,
@@ -81,10 +84,16 @@ enum Command {
     Status,
     /// Stop this profile's sharing agent and release its input.
     Stop,
+    /// Control a nearby computer that runs no Desklink software, as its Bluetooth keyboard
+    /// and mouse.
+    #[cfg(target_os = "linux")]
+    Bluetooth {
+        #[command(subcommand)]
+        command: bluetooth::Command,
+    },
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
+fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -93,13 +102,13 @@ async fn main() {
         )
         .with_writer(std::io::stderr)
         .init();
-    if let Err(error) = execute().await {
+    if let Err(error) = execute() {
         eprintln!("desklink: {error:#}");
         std::process::exit(1);
     }
 }
 
-async fn execute() -> Result<()> {
+fn execute() -> Result<()> {
     let cli = Cli::parse();
     let path = cli.config.unwrap_or(config::default_path()?);
     let command = match cli.command {
@@ -117,10 +126,25 @@ async fn execute() -> Result<()> {
             }
         }
     };
+    // Native UI/tray event loops belong on the main thread, outside any Tokio runtime.
+    #[cfg(feature = "gui")]
+    let command = match command {
+        Command::Ui { test_state } => return desklink_ui::run(path, test_state),
+        command => command,
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(execute_async(path, command))
+}
+
+async fn execute_async(path: PathBuf, command: Command) -> Result<()> {
     match command {
         #[cfg(feature = "gui")]
-        Command::Ui { test_state } => desklink_ui::run(path, test_state)?,
+        Command::Ui { .. } => unreachable!("UI runs outside Tokio"),
         Command::ConfigPath => println!("{}", path.display()),
+        #[cfg(target_os = "linux")]
+        Command::Bluetooth { command } => bluetooth::execute(&path, command).await?,
         Command::Status => {
             let status = desklink_settings::control::request(
                 &path,

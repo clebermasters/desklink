@@ -15,3 +15,9 @@ Input access remains controlled by macOS. Use `desklink permissions --request`, 
 For normal daily operation, run the program in the signed-in user's session. Login items or a user LaunchAgent can start it after login. System launch daemons, login-screen control and FileVault preboot are outside this design.
 
 The developer must supply their own Developer ID identity and notarization credentials for a public signed release. Development bundles can be built without those credentials, but must not be presented as signed/notarized releases. Validate the actual packaged application's permission behavior on supported macOS versions.
+
+## Menu bar and background sharing
+
+Closing or minimizing the editor hides it while sharing continues. The Desklink menu bar icon offers **Open Desklink**, **Start sharing** / **Stop sharing**, and **Quit Desklink**. Quit stops the main sharing agent before exiting and asks what to do with unsaved layout edits. Simply hiding the window preserves those edits in memory.
+
+The menu bar icon uses a monochrome template so macOS can adapt it to light and dark appearances. Create and operate it on the main application thread, outside the input worker's Tokio runtime.

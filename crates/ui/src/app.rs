@@ -1,4 +1,7 @@
-use crate::{agent, theme as t};
+use crate::{
+    agent, theme as t,
+    tray::{self, Action},
+};
 use anyhow::{Context, Result, ensure};
 use desklink_layout::{Geometry, Layout, Screen};
 use desklink_settings::{
@@ -64,6 +67,11 @@ pub struct DesklinkApp {
     pub window_backend: String,
     pointer_debug: Option<[f32; 2]>,
     allow_close: bool,
+    tray: Option<tray::Tray>,
+    tray_initialized: bool,
+    tray_hidden: bool,
+    quit_requested: bool,
+    quitting_since: Option<Instant>,
 }
 
 impl DesklinkApp {
@@ -120,6 +128,11 @@ impl DesklinkApp {
             window_backend: "unknown".into(),
             pointer_debug: None,
             allow_close: false,
+            tray: None,
+            tray_initialized: false,
+            tray_hidden: false,
+            quit_requested: false,
+            quitting_since: None,
         })
     }
     pub fn editable(&self) -> bool {
@@ -239,6 +252,119 @@ impl DesklinkApp {
                 let _ = self.reload();
             }
         }
+    }
+    fn show_window(&mut self, ctx: &egui::Context) {
+        self.tray_hidden = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.request_repaint();
+    }
+    fn hide_window(&mut self, ctx: &egui::Context) {
+        if self.tray.is_some() {
+            self.tray_hidden = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+    }
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        self.quit_requested = true;
+        self.show_window(ctx);
+        if self.dirty {
+            self.close_confirm = true;
+        } else {
+            self.begin_quit();
+        }
+    }
+    fn begin_quit(&mut self) {
+        self.restarting = false;
+        // A startup process may still be waiting for desktop consent, without a control socket.
+        if self.starting
+            && let Some(child) = &mut self.child
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            self.starting = false;
+        }
+        self.quitting_since = Some(Instant::now());
+        self.client.send(Request::Stop);
+    }
+    fn background(&mut self, ctx: &egui::Context) {
+        self.tick();
+        if !self.tray_initialized {
+            self.tray_initialized = true;
+            let result = if self.window_backend == "wayland" {
+                Err(anyhow::anyhow!(
+                    "This Wayland window cannot be hidden and restored; Xwayland is required for tray minimization"
+                ))
+            } else {
+                tray::Tray::new(ctx)
+            };
+            match result {
+                Ok(tray) => self.tray = Some(tray),
+                Err(error) => self.note(format!(
+                    "Tray unavailable: {error}. Closing keeps sharing running."
+                )),
+            }
+        }
+        let actions = self.tray.as_ref().map(|t| t.actions()).unwrap_or_default();
+        for action in actions {
+            match action {
+                Action::Open => self.show_window(ctx),
+                Action::ToggleSharing if self.quitting_since.is_none() => {
+                    if self.status.running {
+                        self.client.send(Request::Stop);
+                    } else if !self.starting
+                        && let Err(error) = self.start()
+                    {
+                        self.error = Some(error.to_string());
+                        self.show_window(ctx);
+                    }
+                }
+                Action::ToggleSharing => {}
+                Action::Quit => self.request_quit(ctx),
+            }
+        }
+        if let Some(since) = self.quitting_since {
+            // Wait for the stop request to complete before removing the tray icon.
+            if !self.status.running && since.elapsed() > Duration::from_millis(750) {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else if since.elapsed() > Duration::from_secs(4) {
+                self.quitting_since = None;
+                self.quit_requested = false;
+                self.error =
+                    Some("Sharing did not stop. Stop sharing and try quitting again.".into());
+                self.show_window(ctx);
+            }
+        }
+        if let Some(tray) = &mut self.tray {
+            let active = self
+                .status
+                .active_computer
+                .as_deref()
+                .and_then(|key| self.config.peers.iter().find(|p| p.public_key == key))
+                .map(|p| p.name.as_str())
+                .unwrap_or(&self.config.name);
+            tray.update(self.status.running, self.starting, active);
+        }
+        if !self.allow_close && self.quit_requested && ctx.input(|i| i.viewport().close_requested())
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+        if !self.allow_close && self.tray.is_some() && !self.quit_requested {
+            let (close, minimized) = ctx.input(|i| {
+                (
+                    i.viewport().close_requested(),
+                    i.viewport().minimized == Some(true),
+                )
+            });
+            if close || minimized && !self.tray_hidden {
+                self.hide_window(ctx);
+            }
+        }
+        ctx.request_repaint_after(Duration::from_millis(250));
     }
     fn header(&mut self, ui: &mut egui::Ui, rect: Rect) {
         ui.painter().rect_filled(rect, 0.0, t::WHITE);
@@ -582,8 +708,11 @@ impl DesklinkApp {
             .hline(rect.x_range(), rect.top(), (1.0, t::BORDER));
         let mut text = "Ctrl + Alt + Shift + Escape returns control to this computer.".to_owned();
         if self.status.running {
-            text =
-                "Sharing stays on when this window closes. Use Stop sharing to disconnect.".into();
+            text = if self.tray.is_some() {
+                "Close or minimize to keep Desklink in the tray. Use the tray menu to reopen or quit.".into()
+            } else {
+                "Sharing stays on when this window closes. Use Stop sharing to disconnect.".into()
+            };
         }
         if let Some((toast, at)) = &self.toast
             && at.elapsed() < Duration::from_secs(5)
@@ -611,7 +740,7 @@ impl DesklinkApp {
         }
         self.last_export = Instant::now();
         if let Some(path) = &self.test_state {
-            let state = serde_json::json!({"size":[size.x,size.y],"window_backend":self.window_backend,"pointer":self.pointer_debug,"targets":self.targets,"layout":self.draft,"dirty":self.dirty,"error":self.error,"layout_error":self.draft.validate().err().map(|e|e.to_string()),"running":self.status.running,"status":self.status,"starting":self.starting,"agent_pid":self.child.as_ref().map(Child::id),"selected":self.selected});
+            let state = serde_json::json!({"size":[size.x,size.y],"window_backend":self.window_backend,"tray_available":self.tray.is_some(),"tray_hidden":self.tray_hidden,"pointer":self.pointer_debug,"targets":self.targets,"layout":self.draft,"dirty":self.dirty,"error":self.error,"layout_error":self.draft.validate().err().map(|e|e.to_string()),"running":self.status.running,"status":self.status,"starting":self.starting,"agent_pid":self.child.as_ref().map(Child::id),"selected":self.selected});
             if let Ok(bytes) = serde_json::to_vec(&state) {
                 let temporary = path.with_extension("tmp");
                 if std::fs::write(&temporary, bytes).is_ok() {
@@ -623,8 +752,10 @@ impl DesklinkApp {
 }
 
 impl eframe::App for DesklinkApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.background(ctx);
+    }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.tick();
         self.pointer_debug = ui.input(|i| i.pointer.hover_pos().map(|p| [p.x, p.y]));
         self.targets.clear();
         ui.ctx().request_repaint_after(Duration::from_millis(180));
@@ -662,6 +793,10 @@ impl eframe::App for DesklinkApp {
         ui.scope_builder(UiBuilder::new().max_rect(main),|ui|{
             ui.heading("Arrange your desk");t::hint(ui,if self.editable(){"Drag computers to match their positions. Touching edges let your pointer cross."}else{"This arrangement is managed by your selected controller."});ui.add_space(16.0);
             ui.horizontal(|ui|{
+                if self.tray.is_some() {
+                    let hide=ui.button("Minimize to tray");self.target("hide-to-tray",hide.rect);
+                    if hide.clicked(){self.hide_window(ui.ctx());}
+                }
                 let fit=ui.button("Fit view");self.target("fit",fit.rect);if fit.clicked(){self.fit=true;}
                 if compact {let details=ui.button("Details");self.target("details",details.rect);if details.clicked(){self.details_open=true;}}
                 ui.add(egui::Slider::new(&mut self.zoom,0.35..=1.8).show_value(false).text("Zoom"));
@@ -699,7 +834,11 @@ impl eframe::App for DesklinkApp {
         if self.fit {
             ui.ctx().request_repaint();
         }
-        if ui.input(|i| i.viewport().close_requested()) && !self.allow_close && self.dirty {
+        if ui.input(|i| i.viewport().close_requested())
+            && !self.allow_close
+            && self.dirty
+            && self.tray.is_none()
+        {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_confirm = true;
@@ -711,16 +850,42 @@ impl eframe::App for DesklinkApp {
                 ui.horizontal(|ui| {
                     if ui.button("Keep editing").clicked() {
                         self.close_confirm = false;
+                        self.quit_requested = false;
                     }
-                    if ui.button("Discard & close").clicked() {
-                        self.allow_close = true;
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    if ui
+                        .button(if self.quit_requested {
+                            "Discard & quit"
+                        } else {
+                            "Discard & close"
+                        })
+                        .clicked()
+                    {
+                        self.close_confirm = false;
+                        if self.quit_requested {
+                            self.dirty = false;
+                            self.begin_quit();
+                        } else {
+                            self.allow_close = true;
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
                     }
-                    if ui.button("Save & close").clicked() {
+                    if ui
+                        .button(if self.quit_requested {
+                            "Save & quit"
+                        } else {
+                            "Save & close"
+                        })
+                        .clicked()
+                    {
                         match self.save() {
                             Ok(()) => {
-                                self.allow_close = true;
-                                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                                self.close_confirm = false;
+                                if self.quit_requested {
+                                    self.begin_quit();
+                                } else {
+                                    self.allow_close = true;
+                                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
                             }
                             Err(e) => self.error = Some(e.to_string()),
                         }
@@ -738,4 +903,40 @@ pub fn short(text: &str, limit: usize) -> String {
         result.push('…');
     }
     result
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn quitting_with_unsaved_edits_preserves_them_until_the_user_decides() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = DesklinkApp::load(temp.path().join("config.toml"), None).unwrap();
+        app.mark_dirty();
+        app.status.running = true;
+        app.request_quit(&egui::Context::default());
+        assert!(app.close_confirm);
+        assert!(app.dirty);
+        assert!(app.status.running);
+        assert!(app.quitting_since.is_none());
+        assert!(!app.allow_close);
+    }
+
+    #[test]
+    fn quitting_waits_for_sharing_to_stop_before_closing() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = DesklinkApp::load(temp.path().join("config.toml"), None).unwrap();
+        app.tray_initialized = true;
+        app.status.running = true;
+        app.request_quit(&egui::Context::default());
+        assert!(app.quitting_since.is_some());
+        assert!(!app.allow_close);
+        app.quitting_since = Some(Instant::now() - Duration::from_secs(1));
+        app.background(&egui::Context::default());
+        assert!(!app.allow_close);
+        app.status.running = false;
+        app.background(&egui::Context::default());
+        assert!(app.allow_close);
+    }
 }

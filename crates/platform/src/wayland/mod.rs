@@ -40,6 +40,7 @@ pub struct Wayland {
     events: stdmpsc::Receiver<LocalEvent>,
     geometry: Arc<Mutex<Geometry>>,
     clipboard: bool,
+    inject: bool,
 }
 
 impl Wayland {
@@ -79,7 +80,7 @@ impl Wayland {
                 }
             })?;
         // The portal may present user approval dialogs. This timeout does not grant permissions.
-        ready
+        let inject = ready
             .recv_timeout(Duration::from_secs(120))
             .context("Wayland approval timed out; approve the input portal dialogs and retry")?
             .map_err(anyhow::Error::msg)?;
@@ -89,6 +90,7 @@ impl Wayland {
             events,
             geometry,
             clipboard,
+            inject,
         })
     }
     fn command(&self, c: Command) -> Result<()> {
@@ -99,6 +101,9 @@ impl Wayland {
 }
 
 impl Desktop for Wayland {
+    fn can_inject(&self) -> bool {
+        self.inject
+    }
     // GNOME 48 discards capture device references on Disable, while the portal
     // permits ConnectToEIS only once. Reauthorize with a fresh session instead.
     fn can_update_capture_spans(&self) -> bool {
@@ -145,6 +150,10 @@ impl Desktop for Wayland {
         self.command(Command::Warp(x, y))
     }
     fn inject(&mut self, input: Input) -> Result<()> {
+        ensure!(
+            self.inject,
+            "This desktop supports sending input only; RemoteDesktop is unavailable"
+        );
         self.command(Command::Input(input))
     }
     fn owns_clipboard(&self) -> bool {
@@ -157,20 +166,29 @@ impl Desktop for Wayland {
 
 pub fn capabilities() -> Capabilities {
     // Probes run on another thread because the application may already have a Tokio runtime.
-    let result=thread::spawn(||->Result<String>{tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
-        let input=InputCapture::new().await.context("InputCapture portal is unavailable")?;
-        let remote=RemoteDesktop::new().await.context("RemoteDesktop portal is unavailable")?;
-        let capabilities=input.supported_capabilities().await?;
-        let devices=remote.available_device_types().await?;
-        ensure!(capabilities.contains(capture::Capabilities::Keyboard|capture::Capabilities::Pointer),"portal does not support keyboard and pointer capture");
-        ensure!(devices.contains(DeviceType::Keyboard|DeviceType::Pointer),"portal does not support keyboard and pointer injection");
-        Ok(format!("InputCapture v{} and RemoteDesktop v{} are available; user approval and EIS device negotiation are required at run time",input.version(),remote.version()))
-    })}).join().map_err(|_|anyhow::anyhow!("portal probe failed")).and_then(|r|r);
+    let result = thread::spawn(|| -> Result<(bool, String)> {
+        tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+            let input = InputCapture::new().await.context("InputCapture portal is unavailable")?;
+            let capabilities = input.supported_capabilities().await?;
+            ensure!(capabilities.contains(capture::Capabilities::Keyboard | capture::Capabilities::Pointer),
+                "portal does not support keyboard and pointer capture");
+            match RemoteDesktop::new().await {
+                Ok(remote) => {
+                    let devices = remote.available_device_types().await?;
+                    let inject = devices.contains(DeviceType::Keyboard | DeviceType::Pointer);
+                    Ok((inject, format!("InputCapture v{} and RemoteDesktop v{} are available; user approval and EIS device negotiation are required at run time", input.version(), remote.version())))
+                }
+                Err(error) if capture_only_allowed(&error, false) => Ok((false, format!(
+                    "InputCapture v{} is available; RemoteDesktop is unavailable. Sending input only is supported with clipboard=false or --no-clipboard; receiving input is unavailable. User approval and EIS negotiation are required at run time", input.version()))),
+                Err(error) => Err(error).context("RemoteDesktop portal probe failed"),
+            }
+        })
+    }).join().map_err(|_| anyhow::anyhow!("portal probe failed")).and_then(|r| r);
     match result {
-        Ok(detail) => Capabilities {
+        Ok((inject, detail)) => Capabilities {
             backend: "wayland-portals",
             capture: true,
-            inject: true,
+            inject,
             geometry: None,
             detail,
         },
@@ -190,13 +208,17 @@ fn emit(tx: &stdmpsc::SyncSender<LocalEvent>, event: LocalEvent) -> Result<()> {
     })
 }
 
+fn capture_only_allowed(error: &ashpd::Error, clipboard: bool) -> bool {
+    !clipboard && matches!(error, ashpd::Error::PortalNotFound(_))
+}
+
 async fn worker(
     spans: Vec<CaptureSpan>,
     use_clipboard: bool,
     mut commands: mpsc::Receiver<Command>,
     events: stdmpsc::SyncSender<LocalEvent>,
     shared: Arc<Mutex<Geometry>>,
-    ready: stdmpsc::SyncSender<std::result::Result<(), String>>,
+    ready: stdmpsc::SyncSender<std::result::Result<bool, String>>,
 ) -> Result<()> {
     let capture = InputCapture::new()
         .await
@@ -214,52 +236,76 @@ async fn worker(
     );
     let capture_session = Arc::new(capture_session);
     let capture_path = session_path(capture_session.as_ref())?;
-    let remote = RemoteDesktop::new()
-        .await
-        .context("desktop does not implement the RemoteDesktop portal")?;
-    let remote_session = Arc::new(remote.create_session(Default::default()).await?);
-    let remote_path = session_path(remote_session.as_ref())?;
-    let clipboard = if use_clipboard {
-        let portal = Arc::new(Clipboard::new().await.context(
-            "clipboard portal unavailable; disable clipboard explicitly to use input-only mode",
-        )?);
-        portal.request(&remote_session, Default::default()).await?;
-        Some(portal)
-    } else {
-        None
+    let remote = match RemoteDesktop::new().await {
+        Ok(remote) => Some(remote),
+        Err(error) if capture_only_allowed(&error, use_clipboard) => {
+            tracing::warn!("RemoteDesktop is unavailable: sending input only; this computer cannot receive input");
+            None
+        }
+        Err(error) => return Err(error).context("desktop does not implement the RemoteDesktop portal; for sending input only, disable clipboard with --no-clipboard or clipboard=false"),
     };
-    remote
-        .select_devices(
-            &remote_session,
-            SelectDevicesOptions::default().set_devices(DeviceType::Keyboard | DeviceType::Pointer),
+    let (remote_session, clipboard, mut injection, sender_events) = if let Some(remote) = remote {
+        let remote_session = Arc::new(remote.create_session(Default::default()).await?);
+        let clipboard = if use_clipboard {
+            let portal = Arc::new(Clipboard::new().await.context(
+                "clipboard portal unavailable; disable clipboard explicitly to use input-only mode",
+            )?);
+            portal.request(&remote_session, Default::default()).await?;
+            Some(portal)
+        } else {
+            None
+        };
+        remote
+            .select_devices(
+                &remote_session,
+                SelectDevicesOptions::default()
+                    .set_devices(DeviceType::Keyboard | DeviceType::Pointer),
+            )
+            .await?
+            .response()?;
+        let started = remote
+            .start(&remote_session, None, Default::default())
+            .await?
+            .response()?;
+        ensure!(
+            started
+                .devices()
+                .contains(DeviceType::Keyboard | DeviceType::Pointer),
+            "remote input permission was denied"
+        );
+        ensure!(
+            !use_clipboard || started.is_clipboard_enabled(),
+            "clipboard sharing permission was not granted by the portal"
+        );
+        let fd = remote
+            .connect_to_eis(&remote_session, Default::default())
+            .await?;
+        let stream = UnixStream::from(fd);
+        stream.set_nonblocking(true)?;
+        let sender_context = reis::ei::Context::new(stream)?;
+        sender_context.flush()?;
+        let (sender_connection, sender_events) = sender_context
+            .handshake_tokio("Desklink input", reis::ei::handshake::ContextType::Sender)
+            .await?;
+        (
+            Some(remote_session),
+            clipboard,
+            Some(ei::Injector::new(sender_connection)),
+            sender_events.left_stream(),
         )
-        .await?
-        .response()?;
-    let started = remote
-        .start(&remote_session, None, Default::default())
-        .await?
-        .response()?;
-    ensure!(
-        started
-            .devices()
-            .contains(DeviceType::Keyboard | DeviceType::Pointer),
-        "remote input permission was denied"
-    );
-    ensure!(
-        !use_clipboard || started.is_clipboard_enabled(),
-        "clipboard sharing permission was not granted by the portal"
-    );
-    let fd = remote
-        .connect_to_eis(&remote_session, Default::default())
-        .await?;
-    let stream = UnixStream::from(fd);
-    stream.set_nonblocking(true)?;
-    let sender_context = reis::ei::Context::new(stream)?;
-    sender_context.flush()?;
-    let (sender_connection, mut sender_events) = sender_context
-        .handshake_tokio("Desklink input", reis::ei::handshake::ContextType::Sender)
-        .await?;
-    let mut injection = ei::Injector::new(sender_connection);
+    } else {
+        (
+            None,
+            None,
+            None,
+            futures_util::stream::pending().right_stream(),
+        )
+    };
+    let mut sender_events = Box::pin(sender_events);
+    let remote_path = remote_session
+        .as_ref()
+        .map(|s| session_path(s.as_ref()))
+        .transpose()?;
     let (receiver_connection, mut receiver_events) =
         capture_stream(&capture, &capture_session).await?;
     let zones = capture
@@ -395,7 +441,7 @@ async fn worker(
                 }
                 _=zones_changed.next()=>anyhow::bail!("display layout changed; restart sharing to reauthorize the capture zones"),
                 event=sender_events.next()=>{
-                    injection.event(event.context("EIS injection connection closed")??)?;
+                    injection.as_mut().context("input emulation is unavailable")?.event(event.context("EIS injection connection closed")??)?;
                 }
                 event=receiver_events.next()=>{
                     let event = event.context("EIS capture connection closed")??;
@@ -435,8 +481,11 @@ async fn worker(
                                     .await?;
                             }
                         }
-                        Command::Warp(x, y) => injection.warp(x, y)?,
-                        Command::Input(input) => injection.input(input)?,
+                        Command::Warp(x, y) => {
+                            // Without emulation, Release restores the compositor's saved entry point.
+                            if let Some(injection) = &injection { injection.warp(x, y)?; }
+                        }
+                        Command::Input(input) => injection.as_ref().context("this desktop supports sending input only")?.input(input)?,
                         Command::Clipboard(content) => {
                             ensure!(content.valid(), "invalid clipboard content");
                             if let Some(c) = &clipboard {
@@ -449,7 +498,7 @@ async fn worker(
                                 };
                                 owned = Some(Arc::new(content));
                                 c.set_selection(
-                                    &remote_session,
+                                    remote_session.as_ref().context("clipboard session unavailable")?,
                                     SetSelectionOptions::default().set_mime_types(&mimes),
                                 )
                                 .await?;
@@ -459,7 +508,7 @@ async fn worker(
                 }
                 change=selection.next()=>{
                     let change = selection::parse(&change.context("clipboard portal closed")?)?;
-                    if change.session.as_str() != remote_path {
+                    if Some(change.session.as_str()) != remote_path.as_deref() {
                         continue;
                     }
                     tracing::debug!(formats=change.mimes.len(),owner=change.owner,"portal clipboard selection changed");
@@ -479,7 +528,7 @@ async fn worker(
                         None
                     };
                     if let (Some(c), Some((mime, kind))) = (&clipboard, mime) {
-                        let (c, session) = (c.clone(), remote_session.clone());
+                        let (c, session) = (c.clone(), remote_session.clone().context("clipboard session unavailable")?);
                         clipboard_reads.start(async move {
                             let fd = c.selection_read(&session, mime).await?;
                             let limit = if kind == ClipboardKind::Text {
@@ -497,12 +546,12 @@ async fn worker(
                 }
                 transfer=transfers.next()=>{
                     let (session,mime,serial):(ashpd::zvariant::OwnedObjectPath,String,u32)=transfer.context("clipboard portal closed")?.body().deserialize()?;
-                    if session.as_str() != remote_path {
+                    if Some(session.as_str()) != remote_path.as_deref() {
                         continue;
                     }
                     if let (Some(c), Some(content)) = (&clipboard, &owned) {
                         if clipboard_writes.len() >= 4 {
-                            c.selection_write_done(&remote_session, serial, false)
+                            c.selection_write_done(remote_session.as_ref().context("clipboard session unavailable")?, serial, false)
                                 .await?;
                             continue;
                         }
@@ -513,7 +562,7 @@ async fn worker(
                             ),
                             ClipboardKind::Png => mime == "image/png",
                         };
-                        let (c, session, content) = (c.clone(), remote_session.clone(), content.clone());
+                        let (c, session, content) = (c.clone(), remote_session.clone().context("clipboard session unavailable")?, content.clone());
                         clipboard_writes.spawn(async move {
                             let result: Result<()> = async {
                                 ensure!(allowed, "clipboard format not offered");
@@ -543,9 +592,9 @@ async fn worker(
 
                 },
                 _=maintenance.tick()=>{
-                    if !announced && injection.ready() {
+                    if !announced && injection.as_ref().is_none_or(ei::Injector::ready) {
                         announced = true;
-                        let _ = ready.send(Ok(()));
+                        let _ = ready.send(Ok(injection.is_some()));
                     }
                     if !sharing
                         && activation
@@ -563,14 +612,16 @@ async fn worker(
                             .await?;
                     }
                 }
-                _=&mut startup,if !announced=>anyhow::bail!("compositor did not provide absolute pointer, keyboard and button emulation devices"),
+                _=&mut startup,if !announced=>anyhow::bail!("compositor did not provide the required capture or emulation devices"),
             }
         }Ok(())
     }.await;
     clipboard_reads.invalidate();
     clipboard_writes.abort_all();
     let _ = capture_session.close().await;
-    let _ = remote_session.close().await;
+    if let Some(session) = remote_session {
+        let _ = session.close().await;
+    }
     result
 }
 
@@ -624,4 +675,25 @@ fn session_path<T: serde::Serialize>(session: &T) -> Result<String> {
         .as_str()
         .map(str::to_owned)
         .context("invalid portal session path")
+}
+
+#[cfg(test)]
+mod capture_only_tests {
+    use super::*;
+
+    #[test]
+    fn absent_emulation_portal_allows_sending_only_with_clipboard_disabled() {
+        let missing = ashpd::Error::PortalNotFound(
+            "org.freedesktop.portal.RemoteDesktop".try_into().unwrap(),
+        );
+        assert!(capture_only_allowed(&missing, false));
+        assert!(!capture_only_allowed(&missing, true));
+    }
+
+    #[test]
+    fn denied_or_broken_portals_do_not_fall_back() {
+        let denied = ashpd::Error::Portal(ashpd::PortalError::NotAllowed("denied".into()));
+        assert!(!capture_only_allowed(&denied, false));
+        assert!(!capture_only_allowed(&ashpd::Error::NoResponse, false));
+    }
 }

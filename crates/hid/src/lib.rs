@@ -5,10 +5,11 @@
 //! reports for a transport such as Bluetooth (an Android phone's HID device profile, or a
 //! Linux adapter). The host sees an ordinary keyboard and mouse.
 pub mod descriptor;
+pub mod queue;
 pub mod usage;
 
 use anyhow::{Result, bail, ensure};
-use descriptor::{ABS_MAX, KEYBOARD, KEYBOARD_LEN, POINTER_ABSOLUTE, POINTER_RELATIVE};
+use descriptor::{ABS_MAX, KEYBOARD, KEYBOARD_LEN, PEN, POINTER_ABSOLUTE, POINTER_RELATIVE};
 use desklink_platform::{Desktop, LocalEvent};
 use desklink_protocol::{ClipboardContent, Geometry, Input};
 
@@ -19,6 +20,15 @@ pub struct Report {
     pub data: Vec<u8>,
     /// A pointer move with no wheel motion and unchanged buttons: a newer one supersedes it.
     pub position_only: bool,
+}
+
+impl Report {
+    /// Whether this report makes the queued `older` one redundant: consecutive positions of the
+    /// same pointer. Anything with a wheel, button or key change, and relative motion, keeps
+    /// its place.
+    pub fn supersedes(&self, older: &Report) -> bool {
+        self.position_only && older.position_only && self.id == older.id
+    }
 }
 
 /// Where reports go. Errors end the receiving session, so sinks should buffer briefly.
@@ -47,6 +57,9 @@ pub struct Options {
 }
 
 const MAX_KEYS: usize = 6;
+const LEFT: u8 = 1;
+const PEN_TIP: u8 = 0b001;
+const PEN_IN_RANGE: u8 = 0b100;
 
 pub struct HidDesktop<S> {
     sink: S,
@@ -54,6 +67,8 @@ pub struct HidDesktop<S> {
     modifiers: u8,
     keys: Vec<u8>,
     buttons: u8,
+    /// The left button is held through the pen (its tip is on the screen).
+    pen: bool,
     position: Option<(i32, i32)>,
 }
 
@@ -71,6 +86,7 @@ impl<S: ReportSink> HidDesktop<S> {
             modifiers: 0,
             keys: Vec::with_capacity(MAX_KEYS),
             buttons: 0,
+            pen: false,
             position: None,
         })
     }
@@ -86,13 +102,47 @@ impl<S: ReportSink> HidDesktop<S> {
         })
     }
 
-    fn absolute_report(&mut self, wheel: i8, pan: i8, position_only: bool) -> Result<()> {
+    /// The current position on the 0..=ABS_MAX scale absolute pointers use.
+    fn scaled_position(&self) -> (u16, u16) {
         let (x, y) = self.position.unwrap_or((0, 0));
         let scale = |v: i32, extent: u32| -> u16 {
             let span = extent.saturating_sub(1).max(1) as i64;
             (v.clamp(0, span as i32) as i64 * ABS_MAX as i64 / span) as u16
         };
-        let (x, y) = (scale(x, self.options.width), scale(y, self.options.height));
+        (scale(x, self.options.width), scale(y, self.options.height))
+    }
+
+    fn pen_report(&mut self, bits: u8, position_only: bool) -> Result<()> {
+        let (x, y) = self.scaled_position();
+        let mut data = Vec::with_capacity(descriptor::PEN_LEN);
+        data.push(bits);
+        data.extend_from_slice(&x.to_le_bytes());
+        data.extend_from_slice(&y.to_le_bytes());
+        self.sink.send(Report {
+            id: PEN,
+            data,
+            position_only,
+        })
+    }
+
+    /// Lifts the pen off the screen and out of range, so the mouse moves the pointer again.
+    fn lift_pen(&mut self) -> Result<()> {
+        self.pen = false;
+        self.pen_report(PEN_IN_RANGE, false)?;
+        self.pen_report(0, false)
+    }
+
+    /// Buttons the relative mouse reports: the left one belongs to the pen while it is down.
+    fn mouse_buttons(&self) -> u8 {
+        if self.pen {
+            self.buttons & !LEFT
+        } else {
+            self.buttons
+        }
+    }
+
+    fn absolute_report(&mut self, wheel: i8, pan: i8, position_only: bool) -> Result<()> {
+        let (x, y) = self.scaled_position();
         let mut data = Vec::with_capacity(descriptor::ABSOLUTE_LEN);
         data.extend_from_slice(&x.to_le_bytes());
         data.extend_from_slice(&y.to_le_bytes());
@@ -105,7 +155,7 @@ impl<S: ReportSink> HidDesktop<S> {
     }
 
     fn relative_report(&mut self, dx: i16, dy: i16, wheel: i8, pan: i8) -> Result<()> {
-        let mut data = vec![self.buttons];
+        let mut data = vec![self.mouse_buttons()];
         data.extend_from_slice(&dx.to_le_bytes());
         data.extend_from_slice(&dy.to_le_bytes());
         data.extend_from_slice(&[wheel as u8, pan as u8]);
@@ -119,7 +169,7 @@ impl<S: ReportSink> HidDesktop<S> {
 
     /// Absolute reports would release held buttons on macOS; see [`PointerMode::Absolute`].
     fn absolute_now(&self) -> bool {
-        self.options.pointer == PointerMode::Absolute && self.buttons == 0
+        self.options.pointer == PointerMode::Absolute && self.buttons == 0 && !self.pen
     }
 
     /// A wheel change at the current position. macOS scrolls only with the absolute pointer's
@@ -197,7 +247,17 @@ impl<S: ReportSink> HidDesktop<S> {
         if self.buttons == before {
             return Ok(());
         }
-        // Buttons always use the relative pointer (see the descriptor), with no movement.
+        let left = 1 << bit == LEFT;
+        if left && down && before == 0 && self.options.pointer == PointerMode::Absolute {
+            // A left-button drag stays exact as a pen: hover in range, then touch down.
+            self.pen = true;
+            self.pen_report(PEN_IN_RANGE, false)?;
+            return self.pen_report(PEN_IN_RANGE | PEN_TIP, false);
+        }
+        if left && !down && self.pen {
+            return self.lift_pen();
+        }
+        // Mouse buttons always use the relative pointer (see the descriptor), with no movement.
         self.relative_report(0, 0, 0, 0)
     }
 
@@ -235,6 +295,9 @@ impl<S: ReportSink> Desktop for HidDesktop<S> {
     }
     /// Lets go of every key and button; the pointer stays where it is.
     fn release(&mut self) -> Result<()> {
+        if self.pen {
+            self.lift_pen()?;
+        }
         self.modifiers = 0;
         self.keys.clear();
         self.buttons = 0;
@@ -243,6 +306,9 @@ impl<S: ReportSink> Desktop for HidDesktop<S> {
     }
     fn warp(&mut self, x: i32, y: i32) -> Result<()> {
         let previous = self.position.replace((x, y));
+        if self.pen {
+            return self.pen_report(PEN_IN_RANGE | PEN_TIP, true);
+        }
         if self.absolute_now() {
             return self.absolute_report(0, 0, true);
         }
@@ -415,26 +481,58 @@ mod tests {
         );
     }
 
+    fn button(d: &mut HidDesktop<Sink>, button: u8, down: bool) {
+        d.inject(Input::Button { button, down }).unwrap();
+    }
+
+    fn pen_at(report: &Report) -> (u8, u16, u16) {
+        let d = &report.data;
+        (
+            d[0],
+            u16::from_le_bytes([d[1], d[2]]),
+            u16::from_le_bytes([d[3], d[4]]),
+        )
+    }
+
     #[test]
-    fn drags_move_relatively_and_land_exactly_after_release() {
+    fn left_drags_are_exact_pen_strokes() {
+        let (sink, mut d) = desktop(PointerMode::Absolute, false);
+        d.warp(0, 0).unwrap();
+        button(&mut d, 1, true);
+        d.warp(1511, 981).unwrap(); // dragging
+        button(&mut d, 1, false);
+        d.warp(1510, 981).unwrap();
+        let r = sink.take();
+        let ids: Vec<_> = r.iter().map(|r| r.id).collect();
+        assert_eq!(
+            ids,
+            [POINTER_ABSOLUTE, PEN, PEN, PEN, PEN, PEN, POINTER_ABSOLUTE]
+        );
+        assert_eq!(pen_at(&r[1]), (PEN_IN_RANGE, 0, 0), "hover");
+        assert_eq!(pen_at(&r[2]), (PEN_IN_RANGE | PEN_TIP, 0, 0), "press");
+        assert_eq!(
+            pen_at(&r[3]),
+            (PEN_IN_RANGE | PEN_TIP, ABS_MAX, ABS_MAX),
+            "the drag lands exactly"
+        );
+        assert!(r[3].position_only && !r[2].position_only);
+        assert_eq!(pen_at(&r[4]).0, PEN_IN_RANGE, "lift");
+        assert_eq!(pen_at(&r[5]).0, 0, "out of range: the mouse moves again");
+        assert!(!r[4].position_only && !r[5].position_only);
+    }
+
+    #[test]
+    fn other_buttons_drag_relatively_without_the_pen_button() {
         let (sink, mut d) = desktop(PointerMode::Absolute, false);
         d.warp(100, 100).unwrap();
-        d.inject(Input::Button {
-            button: 1,
-            down: true,
-        })
-        .unwrap();
-        d.warp(130, 90).unwrap(); // dragging
+        button(&mut d, 3, true); // right
+        d.warp(130, 90).unwrap();
         d.inject(Input::Scroll {
             horizontal: 0,
             vertical: 1,
         })
         .unwrap(); // a wheel turn must not release the held button
-        d.inject(Input::Button {
-            button: 1,
-            down: false,
-        })
-        .unwrap();
+        button(&mut d, 3, false);
         d.warp(131, 90).unwrap();
         let r = sink.take();
         let kinds: Vec<_> = r.iter().map(|r| (r.id, r.data[0])).collect();
@@ -442,9 +540,9 @@ mod tests {
             kinds,
             vec![
                 (POINTER_ABSOLUTE, r[0].data[0]),
-                (POINTER_RELATIVE, 1),            // press
-                (POINTER_RELATIVE, 1),            // drag (+30, -10)
-                (POINTER_RELATIVE, 1),            // wheel while held
+                (POINTER_RELATIVE, 0b10),         // press
+                (POINTER_RELATIVE, 0b10),         // drag (+30, -10)
+                (POINTER_RELATIVE, 0b10),         // wheel while held
                 (POINTER_RELATIVE, 0),            // release
                 (POINTER_ABSOLUTE, r[5].data[0]), // exact again
             ]
@@ -457,6 +555,26 @@ mod tests {
             (30, -10)
         );
         assert_eq!(r[3].data[5] as i8, 1, "wheel in the relative report");
+
+        // A right click during a pen drag leaves the left button to the pen.
+        button(&mut d, 1, true);
+        button(&mut d, 3, true);
+        let r = sink.take();
+        assert_eq!((r[2].id, r[2].data[0]), (POINTER_RELATIVE, 0b10));
+        d.release().unwrap();
+        let r = sink.take();
+        assert_eq!(pen_at(&r[0]).0, PEN_IN_RANGE, "release lifts the pen");
+        assert_eq!(pen_at(&r[1]).0, 0);
+    }
+
+    #[test]
+    fn relative_mode_never_uses_the_pen() {
+        let (sink, mut d) = desktop(PointerMode::Relative, false);
+        button(&mut d, 1, true);
+        button(&mut d, 1, false);
+        let r = sink.take();
+        assert!(r.iter().all(|r| r.id == POINTER_RELATIVE));
+        assert_eq!((r[0].data[0], r[1].data[0]), (1, 0));
     }
 
     #[test]

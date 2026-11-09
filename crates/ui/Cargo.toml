@@ -16,3 +16,14 @@ hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] }
+zbus = { version = "5", features = ["blocking-api"] }
+winit = { version = "0.30.13", default-features = false, features = ["x11"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tray-icon = { version = "0.26.1", default-features = false }
+
+[dev-dependencies]
+tempfile.workspace = true

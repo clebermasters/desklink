@@ -103,7 +103,8 @@ The Bluetooth computer appears in the controlling computer's layout as its own s
 - No clipboard: nothing on that computer can send or receive one.
 - One direction: the Bluetooth computer's own keyboard and mouse don't control the others.
 - One Bluetooth computer at a time; the phone must stay in range with sharing on.
-- On a Mac, dragging moves the pointer through macOS acceleration; when you release the button the pointer jumps back to its exact position (being fixed).
+- Left-button drags are pen strokes, so they stay exact on a Mac and the pointer stays where you let go. Right and middle drags move relatively (with macOS acceleration). A computer paired before this change must forget the phone and pair again to learn the pen.
+- When the Linux computer is within Bluetooth range of the other computer, [Linux can be the keyboard and mouse itself](bluetooth-linux.md): one hop less, and smoother.
 - The computer's keyboard layout setting applies. Desklink sends key positions, as a physical keyboard does.
 - On a managed computer, Bluetooth accessories may be restricted by policy. If pairing is refused, ask IT; don't work around it.
 

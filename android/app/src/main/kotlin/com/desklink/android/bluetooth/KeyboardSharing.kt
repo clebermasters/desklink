@@ -1,6 +1,7 @@
 package com.desklink.android.bluetooth
 
 import android.content.Context
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import com.desklink.android.Action
@@ -41,6 +42,7 @@ class KeyboardSharing(context: Context) {
         hid.start()
         val dir = settings.profileDir
         pump = thread(name = "desklink-keyboard") {
+            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
             try {
                 NativeBridge.keyboardEnsure(dir, KeyboardSettings.DEFAULT_NAME)
                 NativeBridge.keyboardStart(

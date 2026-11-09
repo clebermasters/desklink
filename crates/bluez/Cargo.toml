@@ -1,0 +1,22 @@
+[package]
+name = "desklink-bluez"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Presents a Linux computer to another computer as a Bluetooth keyboard and mouse through BlueZ"
+
+[dependencies]
+desklink-hid.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+futures-util = "0.3"
+libc = "0.2"
+tokio.workspace = true
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "io-std"] }
+tracing-subscriber.workspace = true
