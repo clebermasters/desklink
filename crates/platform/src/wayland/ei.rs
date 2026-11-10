@@ -319,26 +319,107 @@ mod tests {
         }
         assert_eq!(
             fractions.input(EiEvent::PointerMotion(reis::event::PointerMotion {
-                device,
+                device: device.clone(),
                 time: 0,
                 dx: 0.25,
                 dy: -0.25
             })),
             Some(Input::Motion { dx: 1, dy: -1 })
         );
+        scroll_frames_become_clicks(&device);
         stop.store(true, Ordering::Relaxed);
         server_thread.join().unwrap();
     }
+
+    /// Feeds one EI scroll frame (optional smooth delta, optional discrete value120).
+    fn scroll(
+        fractions: &mut Fractions,
+        device: &Device,
+        delta: Option<(f32, f32)>,
+        discrete: Option<(i32, i32)>,
+    ) -> Option<Input> {
+        if let Some((dx, dy)) = delta {
+            let event = reis::event::ScrollDelta {
+                device: device.clone(),
+                time: 0,
+                dx,
+                dy,
+            };
+            assert_eq!(fractions.input(EiEvent::ScrollDelta(event)), None);
+        }
+        if let Some((discrete_dx, discrete_dy)) = discrete {
+            let event = reis::event::ScrollDiscrete {
+                device: device.clone(),
+                time: 0,
+                discrete_dx,
+                discrete_dy,
+            };
+            assert_eq!(fractions.input(EiEvent::ScrollDiscrete(event)), None);
+        }
+        fractions.input(EiEvent::Frame(reis::event::Frame {
+            device: device.clone(),
+            serial: 0,
+            time: 0,
+        }))
+    }
+
+    fn scroll_frames_become_clicks(device: &Device) {
+        let down = Some(Input::Scroll {
+            horizontal: 0,
+            vertical: -1,
+        });
+
+        // Hyprland (0.56) sends the smooth delta as value120 too: 15 and 15 per wheel notch.
+        let mut f = Fractions::default();
+        for _ in 0..3 {
+            assert_eq!(
+                scroll(&mut f, device, Some((0.0, 15.0)), Some((0, 15))),
+                down
+            );
+        }
+
+        // Mutter and KWin: one notch of a standard wheel is a discrete 120.
+        let mut f = Fractions::default();
+        assert_eq!(scroll(&mut f, device, None, Some((0, 120))), down);
+        assert_eq!(
+            scroll(&mut f, device, None, Some((-240, 0))),
+            Some(Input::Scroll {
+                horizontal: -2,
+                vertical: 0
+            })
+        );
+
+        // A high-resolution wheel (KWin): eight 15ths of 120 make one click, never a zero scroll.
+        let mut f = Fractions::default();
+        for _ in 0..7 {
+            assert_eq!(scroll(&mut f, device, None, Some((0, 15))), None);
+        }
+        assert_eq!(scroll(&mut f, device, None, Some((0, 15))), down);
+
+        // Smooth-only scrolling (touchpads): 15 units per click, fractions carried over.
+        let mut f = Fractions::default();
+        assert_eq!(scroll(&mut f, device, Some((0.0, 7.5)), None), None);
+        assert_eq!(scroll(&mut f, device, Some((0.0, 7.5)), None), down);
+        assert_eq!(scroll(&mut f, device, Some((0.0, 0.0)), None), None);
+    }
 }
 
+/// Smooth scroll units per wheel click (libinput's 15 degrees per notch).
+const SMOOTH_PER_CLICK: f32 = 15.0;
+/// EI discrete scroll is in 120ths of a wheel click.
+const DISCRETE_PER_CLICK: i32 = 120;
+
+/// Turns fractional EI pointer motion and scroll into whole units, carrying the remainders.
 #[derive(Default)]
 pub struct Fractions {
     x: f32,
     y: f32,
-    sx: f32,
-    sy: f32,
-    discrete: bool,
-    scroll: Option<(f32, f32)>,
+    /// Scroll seen since the last frame.
+    delta: Option<(f32, f32)>,
+    discrete: Option<(i32, i32)>,
+    /// Scroll not yet sent as whole clicks.
+    smooth_remainder: (f32, f32),
+    discrete_remainder: (i32, i32),
 }
 impl Fractions {
     pub fn input(&mut self, event: EiEvent) -> Option<Input> {
@@ -369,39 +450,53 @@ impl Fractions {
                 })
             }
             EiEvent::ScrollDiscrete(e) => {
-                self.discrete = true;
-                Some(Input::Scroll {
-                    horizontal: (e.discrete_dx / 120).clamp(-120, 120),
-                    vertical: (-e.discrete_dy / 120).clamp(-120, 120),
-                })
+                let (x, y) = self.discrete.unwrap_or_default();
+                self.discrete = Some((
+                    x.saturating_add(e.discrete_dx),
+                    y.saturating_add(e.discrete_dy),
+                ));
+                None
             }
             EiEvent::ScrollDelta(e) => {
-                self.scroll = Some((e.dx, e.dy));
+                let (x, y) = self.delta.unwrap_or_default();
+                self.delta = Some((x + e.dx, y + e.dy));
                 None
             }
-            EiEvent::Frame(_) => {
-                let scroll = self.scroll.take();
-                let discrete = std::mem::take(&mut self.discrete);
-                if discrete {
-                    return None;
-                }
-                if let Some((x, y)) = scroll {
-                    self.sx += x / 15.0;
-                    self.sy += y / 15.0;
-                    let (h, v) = (self.sx.trunc() as i32, self.sy.trunc() as i32);
-                    self.sx -= h as f32;
-                    self.sy -= v as f32;
-                    if h != 0 || v != 0 {
-                        return Some(Input::Scroll {
-                            horizontal: h.clamp(-120, 120),
-                            vertical: (-v).clamp(-120, 120),
-                        });
-                    }
-                }
-                None
-            }
+            EiEvent::Frame(_) => self.scroll_frame(),
             _ => None,
         }
         .filter(|input| input.valid())
+    }
+
+    /// Mutter and KWin send either a smooth delta or a discrete value in a frame. Hyprland
+    /// (0.56) sends both, with the smooth delta repeated as the discrete value, so a frame's
+    /// delta wins whenever there is one.
+    fn scroll_frame(&mut self) -> Option<Input> {
+        let delta = self.delta.take();
+        let discrete = self.discrete.take();
+        let (h, v) = if let Some((x, y)) = delta {
+            let (rx, ry) = &mut self.smooth_remainder;
+            *rx += x / SMOOTH_PER_CLICK;
+            *ry += y / SMOOTH_PER_CLICK;
+            let clicks = (rx.trunc() as i32, ry.trunc() as i32);
+            *rx -= clicks.0 as f32;
+            *ry -= clicks.1 as f32;
+            clicks
+        } else if let Some((x, y)) = discrete {
+            let (rx, ry) = &mut self.discrete_remainder;
+            *rx = rx.saturating_add(x);
+            *ry = ry.saturating_add(y);
+            let clicks = (*rx / DISCRETE_PER_CLICK, *ry / DISCRETE_PER_CLICK);
+            *rx -= clicks.0 * DISCRETE_PER_CLICK;
+            *ry -= clicks.1 * DISCRETE_PER_CLICK;
+            clicks
+        } else {
+            return None;
+        };
+        // EI scrolls down with positive y; Desklink scrolls up with positive vertical.
+        (h != 0 || v != 0).then_some(Input::Scroll {
+            horizontal: h.clamp(-120, 120),
+            vertical: (-v).clamp(-120, 120),
+        })
     }
 }
